@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -183,10 +183,7 @@ TEST(InlineTask, TaskOfMoveOnlyType) {
 TEST(InlineTask, MoveOnlyTypeNRVO) {
   auto f = []() -> InlineTask<MoveOnlyType> {
     MoveOnlyType x{10};
-
-    // Shouldn't need std::move(x) here, according to
-    // N4760 15.8.3(3) Copy/move elision
-    co_return std::move(x);
+    co_return x;
   };
 
   auto x = folly::coro::blockingWait(f());

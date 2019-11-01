@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 #include <folly/futures/Future.h>
 #include <folly/futures/Promise.h>
+#include <folly/futures/test/TestExecutor.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
 
@@ -83,10 +84,11 @@ TEST(Interrupt, futureWithinTimedOut) {
 }
 
 TEST(Interrupt, semiFutureWithinTimedOut) {
+  folly::TestExecutor ex(1);
   Promise<int> p;
   Baton<> done;
   p.setInterruptHandler([&](const exception_wrapper& /* e */) { done.post(); });
-  p.getSemiFuture().within(std::chrono::milliseconds(1));
+  p.getSemiFuture().within(std::chrono::milliseconds(1)).via(&ex);
   // Give it 100ms to time out and call the interrupt handler
   EXPECT_TRUE(done.try_wait_for(std::chrono::milliseconds(100)));
 }

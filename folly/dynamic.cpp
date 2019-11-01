@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -292,12 +292,12 @@ std::size_t dynamic::hash() const {
       // Accumulate using addition instead of using hash_range (as in the ARRAY
       // case), as we need a commutative hash operation since unordered_map's
       // iteration order is unspecified.
-      auto h = std::hash<std::pair<dynamic, dynamic>>{};
+      auto h = std::hash<std::pair<dynamic const, dynamic>>{};
       return std::accumulate(
           items().begin(),
           items().end(),
           size_t{0x0B1EC7},
-          [&](auto acc, auto item) { return acc + h(item); });
+          [&](auto acc, auto const& item) { return acc + h(item); });
     }
     case ARRAY:
       return folly::hash::hash_range(begin(), end());
@@ -462,6 +462,7 @@ const dynamic* dynamic::get_ptr(json_pointer const& jsonPtr) const& {
       throw_exception<TypeError>("object/array", objType);
     case err_code::json_pointer_out_of_bounds:
       return nullptr;
+    case err_code::other:
     default:
       return nullptr;
   }

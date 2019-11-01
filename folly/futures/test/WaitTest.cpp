@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -425,4 +425,17 @@ TEST(Wait, WaitPlusThen) {
     EXPECT_EQ(continuation, 42);
     t.join();
   }
+}
+
+TEST(Wait, cancelAfterWait) {
+  folly::TestExecutor executor(1);
+  Promise<folly::Unit> p;
+  p.setInterruptHandler([&](const exception_wrapper& e) {
+    EXPECT_THROW(e.throw_exception(), FutureCancellation);
+  });
+
+  auto fut = p.getSemiFuture().within(std::chrono::seconds(1)).via(&executor);
+  fut.wait(std::chrono::milliseconds(1));
+  fut.cancel();
+  fut.wait();
 }

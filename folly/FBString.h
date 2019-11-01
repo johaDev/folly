@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,6 +26,10 @@
 #include <stdexcept>
 #include <type_traits>
 
+#if FOLLY_HAS_STRING_VIEW
+#include <string_view>
+#endif
+
 // This file appears in two locations: inside fbcode and in the
 // libstdc++ source code (when embedding fbstring as std::string).
 // To aid in this schizophrenic use, _LIBSTDCXX_FBSTRING is defined in
@@ -44,11 +48,6 @@
 #include <folly/CPortability.h>
 #include <folly/CppAttributes.h>
 #include <folly/Portability.h>
-
-// libc++ doesn't provide this header, nor does msvc
-#if __has_include(<bits/c++config.h>)
-#include <bits/c++config.h>
-#endif
 
 #include <algorithm>
 #include <cassert>
@@ -202,6 +201,7 @@ class fbstring_core_model {
  public:
   fbstring_core_model();
   fbstring_core_model(const fbstring_core_model &);
+  fbstring_core_model& operator=(const fbstring_core_model &) = delete;
   ~fbstring_core_model();
   // Returns a pointer to string's buffer (currently only contiguous
   // strings are supported). The pointer is guaranteed to be valid
@@ -248,9 +248,6 @@ class fbstring_core_model {
   // the string without reallocation. For reference-counted strings,
   // it should fork the data even if minCapacity < size().
   void reserve(size_t minCapacity);
- private:
-  // Do not implement
-  fbstring_core_model& operator=(const fbstring_core_model &);
 };
 */
 
@@ -292,18 +289,6 @@ class fbstring_core_model {
  */
 template <class Char>
 class fbstring_core {
- protected:
-// It's MSVC, so we just have to guess ... and allow an override
-#ifdef _MSC_VER
-#ifdef FOLLY_ENDIAN_BE
-  static constexpr auto kIsLittleEndian = false;
-#else
-  static constexpr auto kIsLittleEndian = true;
-#endif
-#else
-  static constexpr auto kIsLittleEndian =
-      __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
-#endif
  public:
   fbstring_core() noexcept {
     reset();
@@ -327,6 +312,8 @@ class fbstring_core {
     FBSTRING_ASSERT(size() == rhs.size());
     FBSTRING_ASSERT(memcmp(data(), rhs.data(), size() * sizeof(Char)) == 0);
   }
+
+  fbstring_core& operator=(const fbstring_core& rhs) = delete;
 
   fbstring_core(fbstring_core&& goner) noexcept {
     // Take goner's guts
@@ -397,6 +384,10 @@ class fbstring_core {
 
   // In C++11 data() and c_str() are 100% equivalent.
   const Char* data() const {
+    return c_str();
+  }
+
+  Char* data() {
     return c_str();
   }
 
@@ -485,6 +476,7 @@ class fbstring_core {
           return ml_.size_;
         }
         break;
+      case Category::isMedium:
       default:
         break;
     }
@@ -496,8 +488,12 @@ class fbstring_core {
   }
 
  private:
-  // Disabled
-  fbstring_core& operator=(const fbstring_core& rhs);
+  Char* c_str() {
+    Char* ptr = ml_.data_;
+    // With this syntax, GCC and Clang generate a CMOV instead of a branch.
+    ptr = (category() == Category::isSmall) ? small_ : ptr;
+    return ptr;
+  }
 
   void reset() {
     setSmallSize(0);
@@ -1230,6 +1226,12 @@ class basic_fbstring {
     return assign(il.begin(), il.end());
   }
 
+#if FOLLY_HAS_STRING_VIEW
+  operator std::basic_string_view<value_type, traits_type>() const noexcept {
+    return {data(), size()};
+  }
+#endif
+
   // C++11 21.4.3 iterators:
   iterator begin() {
     return store_.mutableData();
@@ -1684,6 +1686,10 @@ class basic_fbstring {
 
   const value_type* data() const {
     return c_str();
+  }
+
+  value_type* data() {
+    return store_.data();
   }
 
   allocator_type get_allocator() const {
@@ -2414,7 +2420,7 @@ inline basic_fbstring<E, T, A, S> operator+(
   basic_fbstring<E, T, A, S> result;
   result.reserve(lhs.size() + rhs.size());
   result.append(lhs).append(rhs);
-  return std::move(result);
+  return result;
 }
 
 // C++11 21.4.8.1/2

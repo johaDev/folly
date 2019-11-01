@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/experimental/pushmi/receiver/flow_receiver.h>
@@ -51,19 +52,18 @@ struct transform_fn {
   template <class F, class In>
   struct submit_impl {
     F f_;
+    using maker_t = receiver_from_fn<std::decay_t<In>>;
     PUSHMI_TEMPLATE(class SIn, class Out)
-    (requires Receiver<Out> && Constructible<F, const F&>) //
-    auto operator()(SIn&& in, Out&& out) & {
+    (requires Receiver<Out> && Constructible<F, const F&> && SenderTo<In, invoke_result_t<maker_t, Out, value_fn<F>>>) //
+    void operator()(SIn&& in, Out&& out) & {
       // copy 'f_' to allow multiple calls to connect to multiple 'in'
-      using maker_t = receiver_from_fn<std::decay_t<In>>;
       ::folly::pushmi::submit(
           (In &&) in,
-          maker_t{}((Out &&) out, value_fn<F>{std::move(f_)}));
+          maker_t{}((Out &&) out, value_fn<F>{f_}));
     }
     PUSHMI_TEMPLATE(class SIn, class Out)
-    (requires Receiver<Out> && Constructible<F, F&&>) //
-    auto operator()(SIn&& in, Out&& out) && {
-      using maker_t = receiver_from_fn<std::decay_t<In>>;
+    (requires Receiver<Out> && MoveConstructible<F> && SenderTo<In, invoke_result_t<maker_t, Out, value_fn<F>>>) //
+    void operator()(SIn&& in, Out&& out) && {
       ::folly::pushmi::submit(
           (In &&) in,
           maker_t{}((Out &&) out, value_fn<F>{std::move(f_)}));

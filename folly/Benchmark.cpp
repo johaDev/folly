@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -335,6 +335,7 @@ class BenchmarkResultsPrinter {
                   int(name.length()),
                   metricReadable(ptr->value, 2).c_str());
               break;
+            case UserMetric::Type::CUSTOM:
             default:
               printf("  %-*d", int(name.length()), ptr->value);
           }
@@ -388,7 +389,19 @@ void benchmarkResultsToDynamic(
     dynamic& out) {
   out = dynamic::array;
   for (auto& datum : data) {
-    out.push_back(dynamic::array(datum.file, datum.name, datum.timeInNs));
+    if (!datum.counters.empty()) {
+      dynamic obj = dynamic::object;
+      for (auto& counter : datum.counters) {
+        dynamic counterInfo = dynamic::object;
+        counterInfo["value"] = counter.second.value;
+        counterInfo["type"] = static_cast<int>(counter.second.type);
+        obj[counter.first] = counterInfo;
+      }
+      out.push_back(
+          dynamic::array(datum.file, datum.name, datum.timeInNs, obj));
+    } else {
+      out.push_back(dynamic::array(datum.file, datum.name, datum.timeInNs));
+    }
   }
 }
 

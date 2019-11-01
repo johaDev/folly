@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,23 +18,6 @@
 #include <folly/Likely.h>
 #include <folly/SingletonThreadLocal.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
-
-namespace folly {
-
-// Instantiate the most common Future types to save compile time
-template class SemiFuture<Unit>;
-template class SemiFuture<bool>;
-template class SemiFuture<int>;
-template class SemiFuture<int64_t>;
-template class SemiFuture<std::string>;
-template class SemiFuture<double>;
-template class Future<Unit>;
-template class Future<bool>;
-template class Future<int>;
-template class Future<int64_t>;
-template class Future<std::string>;
-template class Future<double>;
-} // namespace folly
 
 namespace folly {
 namespace futures {
@@ -60,9 +43,10 @@ Future<Unit> sleepUnsafe(Duration dur, Timekeeper* tk) {
 #if FOLLY_FUTURE_USING_FIBER
 
 namespace {
+template <typename Ptr>
 class FutureWaiter : public fibers::Baton::Waiter {
  public:
-  FutureWaiter(Promise<Unit> promise, std::unique_ptr<fibers::Baton> baton)
+  FutureWaiter(Promise<Unit> promise, Ptr baton)
       : promise_(std::move(promise)), baton_(std::move(baton)) {
     baton_->setWaiter(*this);
   }
@@ -74,14 +58,22 @@ class FutureWaiter : public fibers::Baton::Waiter {
 
  private:
   Promise<Unit> promise_;
-  std::unique_ptr<fibers::Baton> baton_;
+  Ptr baton_;
 };
 } // namespace
 
 SemiFuture<Unit> wait(std::unique_ptr<fibers::Baton> baton) {
   Promise<Unit> promise;
   auto sf = promise.getSemiFuture();
-  new FutureWaiter(std::move(promise), std::move(baton));
+  new FutureWaiter<std::unique_ptr<fibers::Baton>>(
+      std::move(promise), std::move(baton));
+  return sf;
+}
+SemiFuture<Unit> wait(std::shared_ptr<fibers::Baton> baton) {
+  Promise<Unit> promise;
+  auto sf = promise.getSemiFuture();
+  new FutureWaiter<std::shared_ptr<fibers::Baton>>(
+      std::move(promise), std::move(baton));
   return sf;
 }
 

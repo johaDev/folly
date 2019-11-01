@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -155,8 +155,10 @@ static std::unordered_map<uint16_t, std::string> getOpenSSLCipherNames() {
   SSL_CTX* ctx = nullptr;
   SSL* ssl = nullptr;
 
-  const SSL_METHOD* meth = SSLv23_server_method();
+  const SSL_METHOD* meth = TLS_server_method();
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
   OpenSSL_add_ssl_algorithms();
+#endif
 
   if ((ctx = SSL_CTX_new(meth)) == nullptr) {
     return ret;

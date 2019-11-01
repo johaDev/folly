@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <experimental/coroutine>
@@ -56,7 +57,7 @@ class ViaCoroutine {
         bool await_ready() noexcept {
           return false;
         }
-        void await_suspend(
+        FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES void await_suspend(
             std::experimental::coroutine_handle<promise_type> coro) noexcept {
           // Schedule resumption of the coroutine on the executor.
           auto& promise = coro.promise();
@@ -387,6 +388,60 @@ template <typename T>
 using semi_await_result_t = await_result_t<decltype(folly::coro::co_viaIfAsync(
     std::declval<folly::Executor::KeepAlive<>>(),
     std::declval<T>()))>;
+
+namespace detail {
+
+template <typename Awaiter>
+class TryAwaiter {
+ public:
+  TryAwaiter(Awaiter&& awaiter) : awaiter_(std::move(awaiter)) {}
+
+  bool await_ready() {
+    return awaiter_.await_ready();
+  }
+
+  template <typename Promise>
+  auto await_suspend(std::experimental::coroutine_handle<Promise> coro) {
+    return awaiter_.await_suspend(coro);
+  }
+
+  auto await_resume() {
+    return awaiter_.await_resume_try();
+  }
+
+ private:
+  Awaiter awaiter_;
+};
+
+template <typename Awaiter>
+auto makeTryAwaiter(Awaiter&& awaiter) {
+  return TryAwaiter<std::decay_t<Awaiter>>(std::move(awaiter));
+}
+
+template <typename SemiAwaitable>
+class TrySemiAwaitable {
+ public:
+  explicit TrySemiAwaitable(SemiAwaitable&& semiAwaitable)
+      : semiAwaitable_(std::move(semiAwaitable)) {}
+
+  friend auto co_viaIfAsync(
+      Executor::KeepAlive<> executor,
+      TrySemiAwaitable&& self) noexcept {
+    return makeTryAwaiter(get_awaiter(
+        co_viaIfAsync(std::move(executor), std::move(self.semiAwaitable_))));
+  }
+
+ private:
+  SemiAwaitable semiAwaitable_;
+};
+} // namespace detail
+
+template <
+    typename SemiAwaitable,
+    typename = std::enable_if_t<is_semi_awaitable_v<SemiAwaitable>>>
+auto co_awaitTry(SemiAwaitable&& semiAwaitable) {
+  return detail::TrySemiAwaitable<SemiAwaitable>(std::move(semiAwaitable));
+}
 
 } // namespace coro
 } // namespace folly

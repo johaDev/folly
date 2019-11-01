@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <type_traits>
 
 #include <chrono>
@@ -57,7 +58,9 @@ struct ReceiverSignals_ : Base {
   ReceiverSignals_& operator=(const ReceiverSignals_&) = default;
   ReceiverSignals_(ReceiverSignals_&&) = default;
   ReceiverSignals_& operator=(ReceiverSignals_&&) = default;
-  explicit ReceiverSignals_(std::string id) : id_(std::move(id)), counters_(std::make_shared<receiver_counters>()) {}
+  explicit ReceiverSignals_(std::string id) :
+    id_(std::move(id)),
+    counters_(std::make_shared<receiver_counters>()) {}
   std::string id_;
   std::shared_ptr<receiver_counters> counters_;
 
@@ -108,6 +111,12 @@ struct ReceiverSignals_ : Base {
     }
   }
 
+  template<class Fn>
+  void verifyValues(Fn fn) {
+    EXPECT_THAT(fn(counters_->values_.load()), Eq(true))
+        << "[" << id_
+        << "]::verifyValues() expected the value signal(s) to satisfy the predicate.";
+  }
   void verifyValues(int count) {
     EXPECT_THAT(counters_->values_.load(), Eq(count))
         << "[" << id_
@@ -158,6 +167,10 @@ using ReceiverSignals =
     detail::ReceiverSignals_<mi::receiver<>>;
 using FlowReceiverSignals =
     detail::ReceiverSignals_<mi::flow_receiver<>>;
+
+auto zeroOrOne = [](int count){
+  return count == 0 || count == 1;
+};
 
 TEST(EmptySourceEmptyTriggerTrampoline, TakeUntil) {
   std::array<int, 0> ae{};
@@ -237,7 +250,7 @@ TEST(EmptySourceValueTrigger, TakeUntil) {
   source.verifyFinal();
 
   trigger.wait();
-  trigger.verifyValues(1);
+  trigger.verifyValues(zeroOrOne);
   trigger.verifyDones();
   trigger.verifyFinal();
 
@@ -263,6 +276,7 @@ TEST(ValueSourceEmptyTrigger, TakeUntil) {
       op::for_each(each);
 
   source.wait();
+  source.verifyValues(zeroOrOne);
   source.verifyDones();
   source.verifyFinal();
 
@@ -272,7 +286,7 @@ TEST(ValueSourceEmptyTrigger, TakeUntil) {
   trigger.verifyFinal();
 
   each.wait();
-  each.verifyValues(0);
+  each.verifyValues(zeroOrOne);
   each.verifyDones();
   each.verifyFinal();
 }
@@ -291,16 +305,17 @@ TEST(ValueSourceValueTrigger, TakeUntil) {
       op::for_each(each);
 
   source.wait();
+  source.verifyValues(zeroOrOne);
   source.verifyDones();
   source.verifyFinal();
 
   trigger.wait();
-  trigger.verifyValues(1);
+  trigger.verifyValues(zeroOrOne);
   trigger.verifyDones();
   trigger.verifyFinal();
 
   each.wait();
-  each.verifyValues(0);
+  each.verifyValues(zeroOrOne);
   each.verifyDones();
   each.verifyFinal();
 }

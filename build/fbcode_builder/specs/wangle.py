@@ -11,8 +11,14 @@ import specs.sodium as sodium
 
 
 def fbcode_builder_spec(builder):
-    # Projects that simply depend on Wangle need not spend time on tests.
-    builder.add_option('wangle/wangle/build:cmake_defines', {'BUILD_TESTS': 'OFF'})
+    # Projects that **depend** on wangle need not spend time on tests.
+    builder.add_option(
+        'wangle/wangle/build:cmake_defines',
+        {
+            # This is set to ON in the wangle `fbcode_builder_config.py` 
+            'BUILD_TESTS': 'OFF',
+        }
+    )
     return {
         'depends_on': [folly, fizz, sodium],
         'steps': [

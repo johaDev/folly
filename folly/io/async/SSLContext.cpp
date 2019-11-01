@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -53,6 +53,7 @@ SSLContext::SSLContext(SSLVersion version) {
       opt = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 |
           SSL_OP_NO_TLSv1_1;
       break;
+    case SSLv2:
     default:
       // do nothing
       break;
@@ -185,7 +186,7 @@ int SSLContext::getVerificationMode(
     case SSLVerifyPeerEnum::NO_VERIFY:
       mode = SSL_VERIFY_NONE;
       break;
-
+    case SSLVerifyPeerEnum::USE_CTX:
     default:
       break;
   }

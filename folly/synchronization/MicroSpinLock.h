@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -46,6 +46,7 @@
 
 #include <folly/Portability.h>
 #include <folly/lang/Align.h>
+#include <folly/synchronization/SanitizeThread.h>
 #include <folly/synchronization/detail/Sleeper.h>
 
 namespace folly {
@@ -74,21 +75,28 @@ struct MicroSpinLock {
   }
 
   bool try_lock() noexcept {
-    return cas(FREE, LOCKED);
+    bool ret = cas(FREE, LOCKED);
+    annotate_rwlock_try_acquired(
+        this, annotate_rwlock_level::wrlock, ret, __FILE__, __LINE__);
+    return ret;
   }
 
   void lock() noexcept {
     detail::Sleeper sleeper;
-    while (!try_lock()) {
+    while (!cas(FREE, LOCKED)) {
       do {
         sleeper.wait();
       } while (payload()->load(std::memory_order_relaxed) == LOCKED);
     }
     assert(payload()->load() == LOCKED);
+    annotate_rwlock_acquired(
+        this, annotate_rwlock_level::wrlock, __FILE__, __LINE__);
   }
 
   void unlock() noexcept {
     assert(payload()->load() == LOCKED);
+    annotate_rwlock_released(
+        this, annotate_rwlock_level::wrlock, __FILE__, __LINE__);
     payload()->store(FREE, std::memory_order_release);
   }
 

@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +23,7 @@
 
 #include <glog/logging.h>
 
+#include <folly/CppAttributes.h>
 #include <folly/Portability.h>
 #include <folly/String.h>
 #include <folly/experimental/exception_tracer/ExceptionAbi.h>
@@ -107,12 +108,12 @@ namespace {
 struct ArmAbiTag {};
 struct AnyAbiTag {};
 
-bool isAbiCppException(ArmAbiTag, const char (&klazz)[8]) {
+FOLLY_MAYBE_UNUSED bool isAbiCppException(ArmAbiTag, const char (&klazz)[8]) {
   return klazz[4] == 'C' && klazz[5] == '+' && klazz[6] == '+' &&
       klazz[7] == '\0';
 }
 
-bool isAbiCppException(AnyAbiTag, const uint64_t& klazz) {
+FOLLY_MAYBE_UNUSED bool isAbiCppException(AnyAbiTag, const uint64_t& klazz) {
   // The least significant four bytes must be "C++\0"
   static const uint64_t cppClass =
       ((uint64_t)'C' << 24) | ((uint64_t)'+' << 16) | ((uint64_t)'+' << 8);
@@ -176,7 +177,7 @@ std::vector<ExceptionInfo> getCurrentExceptions() {
         : nullptr;
 
     if (traceStack) {
-      LOG_IF(DFATAL, !trace)
+      LOG_IF(WARNING, !trace)
           << "Invalid trace stack for exception of type: "
           << (info.type ? folly::demangle(*info.type) : "null");
 
@@ -192,7 +193,7 @@ std::vector<ExceptionInfo> getCurrentExceptions() {
     exceptions.push_back(std::move(info));
   }
 
-  LOG_IF(DFATAL, trace) << "Invalid trace stack!";
+  LOG_IF(WARNING, trace) << "Invalid trace stack!";
 
   return exceptions;
 }

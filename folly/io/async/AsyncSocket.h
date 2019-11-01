@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Optional.h>
@@ -98,6 +99,15 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
      * @param ex        An exception describing the error that occurred.
      */
     virtual void connectErr(const AsyncSocketException& ex) noexcept = 0;
+
+    /**
+     * preConnect() will be invoked just before the actual connect happens,
+     *              default is no-ops.
+     *
+     * @param fd      An underneath created socket, use for connection.
+     *
+     */
+    virtual void preConnect(NetworkSocket /*fd*/) {}
   };
 
   class EvbChangeCallback {
@@ -146,10 +156,15 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
 
     /**
      * getFlags() will be invoked to retrieve the desired flags to be passed
-     * to ::sendmsg() system call. This method was intentionally declared
-     * non-virtual, so there is no way to override it. Instead feel free to
-     * override getFlagsImpl(flags, defaultFlags) method instead, and enjoy
-     * the convenience of defaultFlags passed there.
+     * to ::sendmsg() system call. It is responsible for converting flags set in
+     * the passed folly::WriteFlags enum into a integer flag bitmask that can be
+     * passed to ::sendmsg. Some flags in folly::WriteFlags do not correspond to
+     * flags that can be passed to ::sendmsg and may instead be handled via
+     * getAncillaryData.
+     *
+     * This method was intentionally declared non-virtual, so there is no way to
+     * override it. Instead feel free to override getFlagsImpl(...) instead, and
+     * enjoy the convenience of defaultFlags passed there.
      *
      * @param flags     Write flags requested for the given write operation
      */
@@ -160,7 +175,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
     /**
      * getAncillaryData() will be invoked to initialize ancillary data
      * buffer referred by "msg_control" field of msghdr structure passed to
-     * ::sendmsg() system call. The function assumes that the size of buffer
+     * ::sendmsg() system call based on the flags set in the passed
+     * folly::WriteFlags enum. Some flags in folly::WriteFlags are not relevant
+     * during this process. The function assumes that the size of buffer
      * is not smaller than the value returned by getAncillaryDataSize() method
      * for the same combination of flags.
      *
@@ -700,6 +717,26 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    */
   int setRecvBufSize(size_t bufsize);
 
+#if __linux__
+  /**
+   * @brief This method is used to get the number of bytes that are currently
+   *        stored in the TCP send/tx buffer
+   *
+   * @return the number of bytes in the send/tx buffer or folly::none if there
+   *         was a problem
+   */
+  size_t getSendBufInUse() const;
+
+  /**
+   * @brief This method is used to get the number of bytes that are currently
+   *        stored in the TCP receive/rx buffer
+   *
+   * @return the number of bytes in the receive/rx buffer or folly::none if
+   *         there was a problem
+   */
+  size_t getRecvBufInUse() const;
+#endif
+
 /**
  * Sets a specific tcp personality
  * Available only on kernels 3.2 and greater
@@ -1201,7 +1238,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   void invalidState(ReadCallback* callback);
   void invalidState(WriteCallback* callback);
 
-  std::string withAddr(const std::string& s);
+  std::string withAddr(folly::StringPiece s);
 
   void cacheLocalAddress() const;
   void cachePeerAddress() const;
@@ -1289,7 +1326,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   bool trackEor_{false};
   bool zeroCopyEnabled_{false};
   bool zeroCopyVal_{false};
-  // zerocopy reenable logic
+  // zerocopy re-enable logic
   size_t zeroCopyReenableThreshold_{0};
   size_t zeroCopyReenableCounter_{0};
 

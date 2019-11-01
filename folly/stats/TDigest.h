@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -94,7 +94,11 @@ class TDigest {
    * Returns a new TDigest constructed with values merged from the current
    * digest and the given sortedValues.
    */
-  TDigest merge(presorted_t, Range<const double*> sortedValues) const;
+  TDigest merge(sorted_equivalent_t, Range<const double*> sortedValues) const;
+  /*
+   * Returns a new TDigest constructed with values merged from the current
+   * digest and the given unsortedValues.
+   */
   TDigest merge(Range<const double*> unsortedValues) const;
 
   /*

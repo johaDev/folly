@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -285,11 +285,15 @@ testWithLock() {
     EXPECT_EQ(1006, lockedObj->size());
     EXPECT_EQ(16, lockedObj->back());
   });
-  obj.withRLockPtr([](typename SynchType::ConstLockedPtr&& lockedObj) {
+  obj.withRLockPtr([](typename SynchType::RLockedPtr&& lockedObj) {
+    EXPECT_TRUE(
+        (std::is_const<std::remove_reference_t<decltype(*lockedObj)>>{}));
     EXPECT_EQ(1006, lockedObj->size());
     EXPECT_EQ(16, lockedObj->back());
   });
-  constObj.withRLockPtr([](typename SynchType::ConstLockedPtr&& lockedObj) {
+  constObj.withRLockPtr([](typename SynchType::ConstRLockedPtr&& lockedObj) {
+    EXPECT_TRUE(
+        (std::is_const<std::remove_reference_t<decltype(*lockedObj)>>{}));
     EXPECT_EQ(1006, lockedObj->size());
     EXPECT_EQ(16, lockedObj->back());
   });
@@ -457,16 +461,16 @@ template <class Mutex>
 void testDeprecated() {
   folly::Synchronized<std::vector<int>, Mutex> obj;
 
-  obj->resize(1000);
+  obj.contextualLock()->resize(1000);
 
   auto obj2 = obj;
-  EXPECT_EQ(1000, obj2->size());
+  EXPECT_EQ(1000, obj2.contextualLock()->size());
 
   SYNCHRONIZED(obj) {
     obj.push_back(10);
     EXPECT_EQ(1001, obj.size());
     EXPECT_EQ(10, obj.back());
-    EXPECT_EQ(1000, obj2->size());
+    EXPECT_EQ(1000, obj2.contextualLock()->size());
   }
 
   SYNCHRONIZED_CONST(obj) {
@@ -477,9 +481,9 @@ void testDeprecated() {
     lockedObj.front() = 2;
   }
 
-  EXPECT_EQ(1001, obj->size());
-  EXPECT_EQ(10, obj->back());
-  EXPECT_EQ(1000, obj2->size());
+  EXPECT_EQ(1001, obj.contextualLock()->size());
+  EXPECT_EQ(10, obj.contextualLock()->back());
+  EXPECT_EQ(1000, obj2.contextualLock()->size());
 
   EXPECT_EQ(FB_ARG_2_OR_1(1, 2), 2);
   EXPECT_EQ(FB_ARG_2_OR_1(1), 1);
@@ -763,8 +767,8 @@ void testTimedSynchronized() {
   folly::Synchronized<uint64_t, Mutex> numTimeouts;
 
   auto worker = [&](size_t threadIdx) {
-    // Test operator->
-    v->push_back(2 * threadIdx);
+    // Test contextualLock()
+    v.contextualLock()->push_back(2 * threadIdx);
 
     // Aaand test the TIMED_SYNCHRONIZED macro
     for (;;) {
@@ -810,8 +814,8 @@ void testTimedSynchronizedWithConst() {
   folly::Synchronized<uint64_t, Mutex> numTimeouts;
 
   auto worker = [&](size_t threadIdx) {
-    // Test operator->
-    v->push_back(threadIdx);
+    // Test contextualLock()
+    v.contextualLock()->push_back(threadIdx);
 
     // Test TIMED_SYNCHRONIZED_CONST
     for (;;) {

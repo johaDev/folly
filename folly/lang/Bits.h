@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +25,10 @@
  *    find last (most significant) bit set in a value of an integral type,
  *    1-based.  0 = no bits are set (x == 0)
  *    for x != 0, findLastSet(x) == 1 + floor(log2(x))
+ *
+ * extractFirstSet(x)  [constexpr]
+ *    extract first (least significant) bit set in a value of an integral
+ *    type, 0 = no bits are set (x == 0)
  *
  * nextPowTwo(x)  [constexpr]
  *    Finds the next power of two >= x.
@@ -73,13 +77,13 @@ template <
     typename To,
     typename From,
     std::enable_if_t<
-        sizeof(From) == sizeof(To) && std::is_trivial<To>::value &&
+        sizeof(From) == sizeof(To) && is_trivially_copyable<To>::value &&
             is_trivially_copyable<From>::value,
         int> = 0>
 To bit_cast(const From& src) noexcept {
-  To to;
-  std::memcpy(&to, &src, sizeof(From));
-  return to;
+  aligned_storage_for_t<To> storage;
+  std::memcpy(&storage, &src, sizeof(From));
+  return reinterpret_cast<To&>(storage);
 }
 
 #endif
@@ -144,6 +148,18 @@ inline constexpr unsigned int findLastSet(T const v) {
       sizeof(T) <= sizeof(U2) ? __builtin_clzll(bits_to_unsigned<U2>(v)) :
       0)) : 0u;
   // clang-format on
+}
+
+/// extractFirstSet
+///
+/// Return a value where all the bits but the least significant are cleared.
+template <typename T>
+inline constexpr T extractFirstSet(T const v) {
+  static_assert(std::is_integral<T>::value, "non-integral type");
+  static_assert(std::is_unsigned<T>::value, "signed type");
+  static_assert(!std::is_same<T, bool>::value, "bool type");
+
+  return v & -v;
 }
 
 /// popcount

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Portability.h>
 
 #if FOLLY_HAS_COROUTINES
@@ -244,9 +245,45 @@ TEST(BlockingWait, WaitInFiber) {
   EXPECT_EQ(42, std::move(future).get());
 }
 
+TEST(BlockingWait, WaitTaskInFiber) {
+  SimplePromise<int> promise;
+  folly::EventBase evb;
+  auto& fm = folly::fibers::getFiberManager(evb);
+
+  auto future = fm.addTaskFuture([&] {
+    return folly::coro::blockingWait(folly::coro::co_invoke(
+        [&]() -> folly::coro::Task<int> { co_return co_await promise; }));
+  });
+
+  evb.loopOnce();
+  EXPECT_FALSE(future.isReady());
+
+  promise.emplace(42);
+
+  evb.loopOnce();
+  EXPECT_TRUE(future.isReady());
+  EXPECT_EQ(42, std::move(future).get());
+}
+
 TEST(BlockingWait, WaitOnSemiFuture) {
   int result = folly::coro::blockingWait(folly::makeSemiFuture(123));
   CHECK_EQ(result, 123);
+}
+
+TEST(BlockingWait, RequestContext) {
+  folly::RequestContext::create();
+  std::shared_ptr<folly::RequestContext> ctx1, ctx2;
+  ctx1 = folly::RequestContext::saveContext();
+  folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+    EXPECT_EQ(ctx1.get(), folly::RequestContext::get());
+    folly::RequestContextScopeGuard guard;
+    ctx2 = folly::RequestContext::saveContext();
+    EXPECT_NE(ctx1, ctx2);
+    co_await folly::coro::co_reschedule_on_current_executor;
+    EXPECT_EQ(ctx2.get(), folly::RequestContext::get());
+    co_return;
+  }());
+  EXPECT_EQ(ctx1.get(), folly::RequestContext::get());
 }
 
 #endif

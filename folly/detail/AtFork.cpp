@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,8 +19,10 @@
 #include <list>
 #include <mutex>
 
+#include <folly/ScopeGuard.h>
 #include <folly/lang/Exception.h>
 #include <folly/portability/PThread.h>
+#include <folly/synchronization/SanitizeThread.h>
 
 namespace folly {
 
@@ -70,6 +72,13 @@ class AtForkList {
   }
 
   static void child() noexcept {
+    // if we fork a multithreaded process
+    // some of the TSAN mutexes might be locked
+    // so we just enable ignores for everything
+    // while handling the child callbacks
+    // This might still be an issue if we do not exec right away
+    annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
+
     auto& tasks = instance().tasks;
     for (auto& task : tasks) {
       task.child();

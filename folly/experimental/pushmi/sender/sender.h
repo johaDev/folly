@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <type_traits>
@@ -50,6 +51,7 @@ class any_sender
   vtable const* vptr_ = &noop_;
   template <class Wrapped>
   any_sender(Wrapped obj, std::false_type) : any_sender() {
+    static_assert(SenderTo<wrapped_t<Wrapped>&, any_receiver<E, VN...>>, "Wrapped object does not support w.submit(any_receiver) - perhaps std::move(w).submit(any_receiver) is supported");
     struct s {
       static void op(data& src, data* dst) {
         if (dst)
@@ -67,6 +69,7 @@ class any_sender
   }
   template <class Wrapped>
   any_sender(Wrapped obj, std::true_type) noexcept : any_sender() {
+    static_assert(SenderTo<wrapped_t<Wrapped>&, any_receiver<E, VN...>>, "Wrapped object does not support w.submit(any_receiver) - perhaps std::move(w).submit(any_receiver) is supported");
     struct s {
       static void op(data& src, data* dst) {
         if (dst)
@@ -95,7 +98,7 @@ class any_sender
   }
 
   PUSHMI_TEMPLATE(class Wrapped)
-  (requires SenderTo<wrapped_t<Wrapped>, any_receiver<E, VN...>>) //
+  (requires Sender<wrapped_t<Wrapped>>) //
   explicit any_sender(Wrapped obj) noexcept(insitu<Wrapped>())
       : any_sender{std::move(obj), bool_<insitu<Wrapped>()>{}} {}
   ~any_sender() {
@@ -106,8 +109,8 @@ class any_sender
     new ((void*)this) any_sender(std::move(that));
     return *this;
   }
-  PUSHMI_TEMPLATE(class Out)
-  (requires ReceiveError<Out, E>&& ReceiveValue<Out, VN...>) //
+  PUSHMI_TEMPLATE_DEBUG(class Out)
+  (requires ReceiveError<Out, E>&& ReceiveValue<Out, VN...> && Constructible<any_receiver<E, VN...>, Out>) //
       void submit(Out&& out) {
     vptr_->submit_(data_, any_receiver<E, VN...>{(Out &&) out});
   }
@@ -126,14 +129,14 @@ class sender<SF> : public sender_tag {
   constexpr sender() = default;
   constexpr explicit sender(SF sf) : sf_(std::move(sf)) {}
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires PUSHMI_EXP(
       lazy::Receiver<Out> PUSHMI_AND lazy::Invocable<SF&, Out>)) //
       void submit(Out out) & {
     sf_(std::move(out));
   }
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires PUSHMI_EXP(
       lazy::Receiver<Out> PUSHMI_AND lazy::Invocable<SF&&, Out>)) //
       void submit(Out out) && {
@@ -159,13 +162,13 @@ class sender<Data, DSF> {
   constexpr sender(Data data, DSF sf)
       : data_(std::move(data)), sf_(std::move(sf)) {}
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires PUSHMI_EXP(
       lazy::Receiver<Out> PUSHMI_AND lazy::Invocable<DSF&, Data&, Out>)) //
       void submit(Out out) & {
     sf_(data_, std::move(out));
   }
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires PUSHMI_EXP(
       lazy::Receiver<Out> PUSHMI_AND lazy::Invocable<DSF&&, Data&&, Out>)) //
       void submit(Out out) && {

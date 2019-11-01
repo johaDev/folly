@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/synchronization/Hazptr-fwd.h>
@@ -637,14 +638,6 @@ FOLLY_ALWAYS_INLINE void hazptr_retire(T* obj, D reclaim) {
 template <template <typename> class Atom>
 void hazptr_cleanup(hazptr_domain<Atom>& domain) noexcept {
   domain.cleanup();
-}
-
-/** hazptr_cleanup_tag: Reclaims objects asssociated with a tag */
-template <template <typename> class Atom>
-void hazptr_cleanup_batch_tag(
-    const hazptr_obj_batch<Atom>* batch,
-    hazptr_domain<Atom>& domain) noexcept {
-  domain.cleanup_batch_tag(batch);
 }
 
 } // namespace folly

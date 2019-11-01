@@ -1,11 +1,11 @@
 /*
- * Copyright 2010-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,6 @@
 #include <folly/ExceptionWrapper.h>
 #include <folly/Random.h>
 #include <folly/SocketAddress.h>
-#include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
@@ -3237,10 +3236,10 @@ TEST_P(AsyncSocketErrMessageCallbackTest, ErrMessageCallback) {
   ASSERT_EQ(wcb.state, STATE_SUCCEEDED);
 
   // Check that we can read the data that was written to the socket
-  std::vector<uint8_t> rbuf(1 + wbuf.size(), 0);
-  uint32_t bytesRead = acceptedSocket->read(rbuf.data(), rbuf.size());
-  ASSERT_TRUE(std::equal(wbuf.begin(), wbuf.end(), rbuf.begin()));
+  std::vector<uint8_t> rbuf(wbuf.size(), 0);
+  uint32_t bytesRead = acceptedSocket->readAll(rbuf.data(), rbuf.size());
   ASSERT_EQ(bytesRead, wbuf.size());
+  ASSERT_TRUE(std::equal(wbuf.begin(), wbuf.end(), rbuf.begin()));
 
   // Close both sockets
   acceptedSocket->close();
@@ -3670,6 +3669,30 @@ TEST(AsyncSocketTest, V6TosReflectTest) {
       netops::getsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, &value, &valueLength);
   ASSERT_EQ(rc, 0);
   ASSERT_EQ(value, 0x2c);
+
+  // Additional Test for ConnectCallback without bindAddr
+  serverSocket->addAcceptCallback(&acceptCallback, &eventBase);
+  serverSocket->startAccepting();
+
+  auto newClientSock = AsyncSocket::newSocket(&eventBase);
+  TestConnectCallback callback;
+  // connect call will not set this SO_REUSEADDR if we do not
+  // pass the bindAddress in its call; so we can safely verify this.
+  newClientSock->connect(&callback, serverAddress, 30);
+
+  // Collect events
+  eventBase.loop();
+
+  auto acceptedFd = acceptCallback.getEvents()->at(1).fd;
+  ASSERT_NE(acceptedFd, NetworkSocket());
+  int reuseAddrVal;
+  socklen_t reuseAddrValLen = sizeof(reuseAddrVal);
+  // Get the socket created underneath connect call of AsyncSocket
+  auto usedSockFd = newClientSock->getNetworkSocket();
+  int getOptRet = netops::getsockopt(
+      usedSockFd, SOL_SOCKET, SO_REUSEADDR, &reuseAddrVal, &reuseAddrValLen);
+  ASSERT_EQ(getOptRet, 0);
+  ASSERT_EQ(reuseAddrVal, 1 /* configured through preConnect*/);
 }
 
 TEST(AsyncSocketTest, V4TosReflectTest) {
@@ -3729,5 +3752,56 @@ TEST(AsyncSocketTest, V4TosReflectTest) {
   int rc = netops::getsockopt(fd, IPPROTO_IP, IP_TOS, &value, &valueLength);
   ASSERT_EQ(rc, 0);
   ASSERT_EQ(value, 0x2c);
+}
+#endif
+
+#if __linux__
+TEST(AsyncSocketTest, getBufInUse) {
+  EventBase eventBase;
+  std::shared_ptr<AsyncServerSocket> server(
+      AsyncServerSocket::newSocket(&eventBase));
+  server->bind(0);
+  server->listen(5);
+
+  std::shared_ptr<AsyncSocket> client = AsyncSocket::newSocket(&eventBase);
+  client->connect(nullptr, server->getAddress());
+
+  NetworkSocket servfd = server->getNetworkSocket();
+  NetworkSocket accepted;
+  uint64_t maxTries = 5;
+
+  do {
+    std::this_thread::yield();
+    eventBase.loop();
+    accepted = netops::accept(servfd, nullptr, nullptr);
+  } while (accepted == NetworkSocket() && --maxTries);
+
+  // Exhaustion number of tries to accept client connection, good bye
+  ASSERT_TRUE(accepted != NetworkSocket());
+
+  auto clientAccepted = AsyncSocket::newSocket(nullptr, accepted);
+
+  // Use minimum receive buffer size
+  clientAccepted->setRecvBufSize(0);
+
+  // Use maximum send buffer size
+  client->setSendBufSize((unsigned)-1);
+
+  std::string testData;
+  for (int i = 0; i < 10000; ++i) {
+    testData += "0123456789";
+  }
+
+  client->write(nullptr, (const void*)testData.c_str(), testData.size());
+
+  std::this_thread::yield();
+  eventBase.loop();
+
+  size_t recvBufSize = clientAccepted->getRecvBufInUse();
+  size_t sendBufSize = client->getSendBufInUse();
+
+  EXPECT_EQ((recvBufSize + sendBufSize), testData.size());
+  EXPECT_GT(recvBufSize, 0);
+  EXPECT_GT(sendBufSize, 0);
 }
 #endif

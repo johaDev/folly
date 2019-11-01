@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -305,11 +305,16 @@ void AsyncServerSocket::bindSocket(
   sockaddr* saddr = reinterpret_cast<sockaddr*>(&addrStorage);
 
   if (netops::bind(fd, saddr, address.getActualSize()) != 0) {
-    if (!isExistingSocket) {
-      closeNoInt(fd);
+    if (errno != EINPROGRESS) {
+      // Get a copy of errno so that it is not overwritten by subsequent calls.
+      auto errnoCopy = errno;
+      if (!isExistingSocket) {
+        closeNoInt(fd);
+      }
+      folly::throwSystemError(
+          errnoCopy,
+          "failed to bind to async server socket: " + address.describe());
     }
-    folly::throwSystemError(
-        errno, "failed to bind to async server socket: " + address.describe());
   }
 
 #if __linux__
@@ -369,10 +374,8 @@ void AsyncServerSocket::bind(
   if (ipAddresses.empty()) {
     throw std::invalid_argument("No ip addresses were provided");
   }
-  if (!sockets_.empty()) {
-    throw std::invalid_argument(
-        "Cannot call bind on a AsyncServerSocket "
-        "that already has a socket.");
+  if (eventBase_) {
+    eventBase_->dcheckIsInEventBaseThread();
   }
 
   for (const IPAddress& ipAddress : ipAddresses) {
@@ -836,7 +839,7 @@ void AsyncServerSocket::handlerReady(
   for (uint32_t n = 0; n < maxAcceptAtOnce_; ++n) {
     SocketAddress address;
 
-    sockaddr_storage addrStorage;
+    sockaddr_storage addrStorage = {};
     socklen_t addrLen = sizeof(addrStorage);
     sockaddr* saddr = reinterpret_cast<sockaddr*>(&addrStorage);
 
@@ -847,7 +850,7 @@ void AsyncServerSocket::handlerReady(
     }
 
     // Accept a new client socket
-#ifdef SOCK_NONBLOCK
+#if FOLLY_HAVE_ACCEPT4
     auto clientSocket = NetworkSocket::fromFd(
         accept4(fd.toFd(), saddr, &addrLen, SOCK_NONBLOCK));
 #else
@@ -872,16 +875,21 @@ void AsyncServerSocket::handlerReady(
         uint32_t tosWord = folly::Endian::big(buffer[0]);
         if (addressFamily == AF_INET6) {
           tosWord = (tosWord & 0x0FC00000) >> 20;
-          ret = netops::setsockopt(
-              clientSocket,
-              IPPROTO_IPV6,
-              IPV6_TCLASS,
-              &tosWord,
-              sizeof(tosWord));
+          // Set the TOS on the return socket only if it is non-zero
+          if (tosWord) {
+            ret = netops::setsockopt(
+                clientSocket,
+                IPPROTO_IPV6,
+                IPV6_TCLASS,
+                &tosWord,
+                sizeof(tosWord));
+          }
         } else if (addressFamily == AF_INET) {
           tosWord = (tosWord & 0x00FC0000) >> 16;
-          ret = netops::setsockopt(
-              clientSocket, IPPROTO_IP, IP_TOS, &tosWord, sizeof(tosWord));
+          if (tosWord) {
+            ret = netops::setsockopt(
+                clientSocket, IPPROTO_IP, IP_TOS, &tosWord, sizeof(tosWord));
+          }
         }
 
         if (ret != 0) {
@@ -942,7 +950,7 @@ void AsyncServerSocket::handlerReady(
       return;
     }
 
-#ifndef SOCK_NONBLOCK
+#if !FOLLY_HAVE_ACCEPT4
     // Explicitly set the new connection to non-blocking mode
     if (netops::set_socket_non_blocking(clientSocket) != 0) {
       closeNoInt(clientSocket);

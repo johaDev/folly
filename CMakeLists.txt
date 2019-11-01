@@ -1,3 +1,17 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 cmake_minimum_required(VERSION 3.0.2 FATAL_ERROR)
 # We use the GoogleTest module if it is available (only in CMake 3.9+)
 # It requires CMP0054 and CMP0057 to be enabled.
@@ -53,6 +67,9 @@ option(BUILD_SHARED_LIBS
 # is generally discouraged.
 mark_as_advanced(BUILD_SHARED_LIBS)
 set(FOLLY_SUPPORT_SHARED_LIBRARY "${BUILD_SHARED_LIBS}")
+
+include(FBBuildOptions)
+fb_activate_static_library_option()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # Check target architecture
@@ -136,13 +153,15 @@ list(REMOVE_ITEM hfiles
 )
 
 # Explicitly include utility library code from inside
-# folly/test and folly/io/async/test/
+# test subdirs
 list(APPEND files
   ${FOLLY_DIR}/io/async/test/ScopedBoundPort.cpp
   ${FOLLY_DIR}/io/async/test/SocketPair.cpp
   ${FOLLY_DIR}/io/async/test/TimeUtil.cpp
 )
 list(APPEND hfiles
+  ${FOLLY_DIR}/container/test/F14TestUtil.h
+  ${FOLLY_DIR}/container/test/TrackingTypes.h
   ${FOLLY_DIR}/io/async/test/AsyncSSLSocketTest.h
   ${FOLLY_DIR}/io/async/test/AsyncSocketTest.h
   ${FOLLY_DIR}/io/async/test/AsyncSocketTest2.h
@@ -159,6 +178,7 @@ list(APPEND hfiles
   ${FOLLY_DIR}/io/async/test/TimeUtil.h
   ${FOLLY_DIR}/io/async/test/UndelayedDestruction.h
   ${FOLLY_DIR}/io/async/test/Util.h
+  ${FOLLY_DIR}/synchronization/test/Semaphore.h
   ${FOLLY_DIR}/test/DeterministicSchedule.h
   ${FOLLY_DIR}/test/JsonTestUtil.h
   ${FOLLY_DIR}/test/TestUtils.h
@@ -330,6 +350,7 @@ add_library(folly
   $<TARGET_OBJECTS:folly_base>
 )
 apply_folly_compile_options_to_target(folly)
+target_compile_features(folly INTERFACE cxx_generic_lambdas)
 
 target_link_libraries(folly PUBLIC folly_deps)
 
@@ -390,8 +411,13 @@ install(
 # CMake can depend on folly using pkg-config.
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/CMake/libfolly.pc.in
-  ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc
+  ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc.gen
   @ONLY
+)
+file(
+  GENERATE
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc
+  INPUT ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc.gen
 )
 install(
   FILES ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc
@@ -435,11 +461,9 @@ if (BUILD_TESTS)
     ${FOLLY_DIR}/test/SingletonTestStructs.cpp
     ${FOLLY_DIR}/test/SocketAddressTestHelper.cpp
     ${FOLLY_DIR}/test/SocketAddressTestHelper.h
+    ${FOLLY_DIR}/container/test/F14TestUtil.h
+    ${FOLLY_DIR}/container/test/TrackingTypes.h
     ${FOLLY_DIR}/experimental/test/CodingTestUtils.cpp
-    ${FOLLY_DIR}/logging/test/ConfigHelpers.cpp
-    ${FOLLY_DIR}/logging/test/ConfigHelpers.h
-    ${FOLLY_DIR}/logging/test/TestLogHandler.cpp
-    ${FOLLY_DIR}/logging/test/TestLogHandler.h
     ${FOLLY_DIR}/futures/test/TestExecutor.cpp
     ${FOLLY_DIR}/futures/test/TestExecutor.h
     ${FOLLY_DIR}/io/async/test/BlockingSocket.h
@@ -459,6 +483,10 @@ if (BUILD_TESTS)
     ${FOLLY_DIR}/io/async/test/TimeUtil.h
     ${FOLLY_DIR}/io/async/test/UndelayedDestruction.h
     ${FOLLY_DIR}/io/async/test/Util.h
+    ${FOLLY_DIR}/logging/test/ConfigHelpers.cpp
+    ${FOLLY_DIR}/logging/test/ConfigHelpers.h
+    ${FOLLY_DIR}/logging/test/TestLogHandler.cpp
+    ${FOLLY_DIR}/logging/test/TestLogHandler.h
   )
   target_compile_definitions(folly_test_support
     PUBLIC
@@ -501,6 +529,7 @@ if (BUILD_TESTS)
       TEST foreach_test SOURCES ForeachTest.cpp
       TEST merge_test SOURCES MergeTest.cpp
       TEST sparse_byte_set_test SOURCES SparseByteSetTest.cpp
+      TEST util_test SOURCES UtilTest.cpp
 
     DIRECTORY concurrency/test/
       TEST atomic_shared_ptr_test SOURCES AtomicSharedPtrTest.cpp
@@ -549,6 +578,7 @@ if (BUILD_TESTS)
       TEST lock_free_ring_buffer_test SOURCES LockFreeRingBufferTest.cpp
       #TEST nested_command_line_app_test SOURCES NestedCommandLineAppTest.cpp
       #TEST program_options_test SOURCES ProgramOptionsTest.cpp
+      TEST quotient_multiset_test SOURCES QuotientMultiSetTest.cpp
       # Depends on liburcu
       #TEST read_mostly_shared_ptr_test SOURCES ReadMostlySharedPtrTest.cpp
       #TEST ref_count_test SOURCES RefCountTest.cpp
@@ -705,7 +735,10 @@ if (BUILD_TESTS)
       TEST ssl_errors_test SOURCES SSLErrorsTest.cpp
 
     DIRECTORY lang/test/
+      TEST aligned_test SOURCES AlignedTest.cpp
       TEST bits_test SOURCES BitsTest.cpp
+      TEST c_string_test SOURCES CStringTest.cpp
+      TEST cast_test SOURCES CastTest.cpp
       TEST cold_class_test SOURCES ColdClassTest.cpp
       TEST safe_assert_test SOURCES SafeAssertTest.cpp
 
@@ -743,6 +776,10 @@ if (BUILD_TESTS)
       TEST call_once_test SOURCES CallOnceTest.cpp
       TEST lifo_sem_test SOURCES LifoSemTests.cpp
       TEST rw_spin_lock_test SOURCES RWSpinLockTest.cpp
+      TEST semaphore_test SOURCES SemaphoreTest.cpp
+
+    DIRECTORY synchronization/detail/test/
+      TEST hardware_test SOURCES HardwareTest.cpp
 
     DIRECTORY system/test/
       TEST memory_mapping_test SOURCES MemoryMappingTest.cpp
@@ -789,6 +826,7 @@ if (BUILD_TESTS)
       TEST file_util_test HANGING
         SOURCES FileUtilTest.cpp
       TEST fingerprint_test SOURCES FingerprintTest.cpp
+      TEST fixed_string_test SOURCES FixedStringTest.cpp
       TEST format_other_test SOURCES FormatOtherTest.cpp
       TEST format_test SOURCES FormatTest.cpp
       TEST function_test BROKEN
@@ -807,10 +845,7 @@ if (BUILD_TESTS)
       #TEST json_test SOURCES JsonTest.cpp
       TEST json_pointer_test SOURCES json_pointer_test.cpp
       TEST json_patch_test SOURCES json_patch_test.cpp
-      TEST json_other_test
-        CONTENT_DIR json_test_data/
-        SOURCES
-          JsonOtherTest.cpp
+      TEST json_other_test SOURCES JsonOtherTest.cpp
       TEST lazy_test SOURCES LazyTest.cpp
       TEST lock_traits_test SOURCES LockTraitsTest.cpp
       TEST locks_test SOURCES SpinLockTest.cpp

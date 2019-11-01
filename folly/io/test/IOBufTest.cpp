@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -1603,4 +1603,77 @@ TEST(IOBuf, fillIov2) {
 
   EXPECT_EQ(0, res.numIovecs);
   EXPECT_EQ(0, res.totalLength);
+}
+
+TEST(IOBuf, FreeFn) {
+  class IOBufFreeObserver {
+   public:
+    using Func = std::function<void()>;
+    explicit IOBufFreeObserver(Func&& freeFunc, Func&& releaseFunc)
+        : freeFunc_(std::move(freeFunc)),
+          releaseFunc_(std::move(releaseFunc)) {}
+    void afterFreeExtBuffer() const noexcept {
+      freeFunc_();
+    }
+    void afterReleaseExtBuffer() const noexcept {
+      releaseFunc_();
+    }
+
+   private:
+    Func freeFunc_;
+    Func releaseFunc_;
+  };
+
+  int freeVal = 0;
+  int releaseVal = 0;
+  IOBufFreeObserver observer(
+      [&freeVal]() { freeVal += 1; }, [&releaseVal]() { releaseVal += 1; });
+
+  // no observers
+  { unique_ptr<IOBuf> iobuf(IOBuf::create(64)); }
+
+  // one observer
+  {
+    unique_ptr<IOBuf> iobuf(IOBuf::create(64));
+
+    EXPECT_TRUE(iobuf->appendSharedInfoObserver(observer));
+  }
+  EXPECT_EQ(freeVal, 1);
+  EXPECT_EQ(releaseVal, 0);
+
+  freeVal = 0;
+  releaseVal = 0;
+  // reserve
+  {
+    unique_ptr<IOBuf> iobuf(IOBuf::create(64));
+    EXPECT_TRUE(iobuf->appendSharedInfoObserver(observer));
+    iobuf->reserve(0, iobuf->capacity() + 1024);
+    EXPECT_EQ(freeVal, 1);
+    EXPECT_EQ(releaseVal, 0);
+  }
+
+  freeVal = 0;
+  releaseVal = 0;
+  // one observer - call moveToFbString
+  {
+    unique_ptr<IOBuf> iobuf(IOBuf::create(64 * 1024));
+
+    EXPECT_TRUE(iobuf->appendSharedInfoObserver(observer));
+    auto str = iobuf->moveToFbString().toStdString();
+  }
+  EXPECT_EQ(freeVal, 0);
+  EXPECT_EQ(releaseVal, 1);
+
+  freeVal = 0;
+  releaseVal = 0;
+  // multiple observers
+  {
+    unique_ptr<IOBuf> iobuf(IOBuf::create(64));
+
+    for (size_t i = 0; i < 3; i++) {
+      EXPECT_TRUE(iobuf->appendSharedInfoObserver(observer));
+    }
+  }
+  EXPECT_EQ(freeVal, 3);
+  EXPECT_EQ(releaseVal, 0);
 }

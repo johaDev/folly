@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -1323,6 +1323,15 @@ static lzma_ret lzmaThrowOnError(lzma_ret const rc) {
     case LZMA_STREAM_END:
     case LZMA_BUF_ERROR: // not fatal: returned if no progress was made twice
       return rc;
+    case LZMA_NO_CHECK:
+    case LZMA_UNSUPPORTED_CHECK:
+    case LZMA_GET_CHECK:
+    case LZMA_MEM_ERROR:
+    case LZMA_MEMLIMIT_ERROR:
+    case LZMA_FORMAT_ERROR:
+    case LZMA_OPTIONS_ERROR:
+    case LZMA_DATA_ERROR:
+    case LZMA_PROG_ERROR:
     default:
       throw std::runtime_error(
           to<std::string>("LZMA2StreamCodec: error: ", rc));

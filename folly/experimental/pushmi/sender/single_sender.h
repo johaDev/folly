@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <type_traits>
@@ -101,8 +102,7 @@ class any_single_sender
     static const vtable vtbl{s::op, s::submit};
     new (&data_.buffer_) Wrapped(std::move(obj));
     vptr_ = &vtbl;
-  }
-  template <class Wrapped>
+  }  template <class Wrapped>
   any_single_sender(Wrapped obj, std::false_type, std::true_type) noexcept
       : any_single_sender() {
     struct s {
@@ -144,8 +144,8 @@ class any_single_sender
     new ((void*)this) any_single_sender(std::move(that));
     return *this;
   }
-  PUSHMI_TEMPLATE(class Out)
-  (requires ReceiveError<Out, E>&& ReceiveValue<Out, VN...>) //
+  PUSHMI_TEMPLATE_DEBUG(class Out)
+  (requires ReceiveError<Out, E>&& ReceiveValue<Out, VN...> && Constructible<any_receiver<E, VN...>, Out>) //
       void submit(Out&& out) {
     vptr_->submit_(data_, any_receiver<E, VN...>{(Out &&) out});
   }
@@ -166,13 +166,13 @@ class single_sender<SF> {
   constexpr single_sender() = default;
   constexpr explicit single_sender(SF sf) : sf_(std::move(sf)) {}
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires Receiver<Out> && Invocable<SF&, Out>) //
       void submit(Out&& out) & {
     sf_((Out&&)out);
   }
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires Receiver<Out> && Invocable<SF&&, Out>) //
       void submit(Out&& out) && {
     std::move(sf_)((Out&&)out);
@@ -198,12 +198,12 @@ class single_sender<Data, DSF> {
   constexpr single_sender(Data data, DSF sf)
       : data_(std::move(data)), sf_(std::move(sf)) {}
 
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires Receiver<Out> && Invocable<DSF&, Data&, Out>) //
       void submit(Out&& out) & {
     sf_(data_, (Out&&)out);
   }
-  PUSHMI_TEMPLATE(class Out)
+  PUSHMI_TEMPLATE_DEBUG(class Out)
   (requires Receiver<Out> && Invocable<DSF&&, Data&&, Out>) //
       void submit(Out&& out) && {
     std::move(sf_)(std::move(data_), (Out&&)out);

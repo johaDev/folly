@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,7 +37,20 @@ namespace folly {
 //////////////////////////////////////////////////////////////////////
 
 namespace json {
+
 namespace {
+
+parse_error make_parse_error(
+    unsigned int line,
+    std::string const& context,
+    std::string const& expected) {
+  return parse_error(to<std::string>(
+      "json parse error on line ",
+      line,
+      !context.empty() ? to<std::string>(" near `", context, '\'') : "",
+      ": ",
+      expected));
+}
 
 struct Printer {
   explicit Printer(
@@ -51,7 +64,7 @@ struct Printer {
       case dynamic::DOUBLE:
         if (!opts_.allow_nan_inf &&
             (std::isnan(v.asDouble()) || std::isinf(v.asDouble()))) {
-          throw std::runtime_error(
+          throw json::parse_error(
               "folly::toJson: JSON object value was a "
               "NaN or INF");
         }
@@ -91,7 +104,7 @@ struct Printer {
  private:
   void printKV(const std::pair<const dynamic, dynamic>& p) const {
     if (!opts_.allow_non_string_keys && !p.first.isString()) {
-      throw std::runtime_error(
+      throw json::parse_error(
           "folly::toJson: JSON object key was not a "
           "string");
     }
@@ -121,16 +134,18 @@ struct Printer {
     newline();
     if (opts_.sort_keys || opts_.sort_keys_by) {
       using ref = std::reference_wrapper<decltype(o.items())::value_type const>;
+      auto sort_keys_by = [&](auto begin, auto end, const auto& comp) {
+        std::sort(begin, end, [&](ref a, ref b) {
+          // Only compare keys.  No ordering among identical keys.
+          return comp(a.get().first, b.get().first);
+        });
+      };
       std::vector<ref> refs(o.items().begin(), o.items().end());
-
-      using SortByRef = FunctionRef<bool(dynamic const&, dynamic const&)>;
-      auto const& sort_keys_by = opts_.sort_keys_by
-          ? SortByRef(opts_.sort_keys_by)
-          : SortByRef(std::less<dynamic>());
-      std::sort(refs.begin(), refs.end(), [&](ref a, ref b) {
-        // Only compare keys.  No ordering among identical keys.
-        return sort_keys_by(a.get().first, b.get().first);
-      });
+      if (opts_.sort_keys_by) {
+        sort_keys_by(refs.begin(), refs.end(), opts_.sort_keys_by);
+      } else {
+        sort_keys_by(refs.begin(), refs.end(), std::less<>());
+      }
       printKVPairs(refs.cbegin(), refs.cend());
     } else {
       printKVPairs(o.items().begin(), o.items().end());
@@ -190,19 +205,6 @@ struct Printer {
 };
 
 //////////////////////////////////////////////////////////////////////
-
-struct FOLLY_EXPORT ParseError : std::runtime_error {
-  explicit ParseError(
-      unsigned int line,
-      std::string const& context,
-      std::string const& expected)
-      : std::runtime_error(to<std::string>(
-            "json parse error on line ",
-            line,
-            !context.empty() ? to<std::string>(" near `", context, '\'') : "",
-            ": ",
-            expected)) {}
-};
 
 // Wraps our input buffer with some helper functions.
 struct Input {
@@ -279,7 +281,7 @@ struct Input {
 
   void expect(char c) {
     if (**this != c) {
-      throw ParseError(
+      throw json::make_parse_error(
           lineNum_, context(), to<std::string>("expected '", c, '\''));
     }
     ++*this;
@@ -321,7 +323,7 @@ struct Input {
   }
 
   dynamic error(char const* what) const {
-    throw ParseError(lineNum_, context(), what);
+    throw json::make_parse_error(lineNum_, context(), what);
   }
 
   json::serialization_opts const& getOpts() {
@@ -718,7 +720,7 @@ size_t firstEscapableInWord(T s, const serialization_opts& opts) {
           (i == 0 ? uint64_t(-1) << 32 : ~0UL);
       while (bitmap) {
         auto bit = folly::findFirstSet(bitmap);
-        needsEscape |= isChar(offset + bit - 1);
+        needsEscape |= isChar(static_cast<uint8_t>(offset + bit - 1));
         bitmap &= bitmap - 1;
       }
     }
@@ -994,6 +996,7 @@ std::string toJson(dynamic const& dyn) {
 std::string toPrettyJson(dynamic const& dyn) {
   json::serialization_opts opts;
   opts.pretty_formatting = true;
+  opts.sort_keys = true;
   return json::serialize(dyn, opts);
 }
 

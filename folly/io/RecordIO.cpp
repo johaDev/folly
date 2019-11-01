@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -167,19 +167,29 @@ size_t prependHeader(std::unique_ptr<IOBuf>& buf, uint32_t fileId) {
   return lengthAndHash.first + headerSize();
 }
 
-RecordInfo validateRecord(ByteRange range, uint32_t fileId) {
+bool validateRecordHeader(ByteRange range, uint32_t fileId) {
+  if (range.size() < headerSize()) { // records may not be empty
+    return false;
+  }
+  const Header* header = reinterpret_cast<const Header*>(range.begin());
+  if (header->magic != Header::kMagic || header->version != 0 ||
+      header->hashFunction != 0 || header->flags != 0 ||
+      (fileId != 0 && header->fileId != fileId)) {
+    return false;
+  }
+  if (headerHash(*header) != header->headerHash) {
+    return false;
+  }
+  return true;
+}
+
+RecordInfo validateRecordData(ByteRange range) {
   if (range.size() <= headerSize()) { // records may not be empty
     return {0, {}};
   }
   const Header* header = reinterpret_cast<const Header*>(range.begin());
   range.advance(sizeof(Header));
-  if (header->magic != Header::kMagic || header->version != 0 ||
-      header->hashFunction != 0 || header->flags != 0 ||
-      (fileId != 0 && header->fileId != fileId) ||
-      header->dataLength > range.size()) {
-    return {0, {}};
-  }
-  if (headerHash(*header) != header->headerHash) {
+  if (header->dataLength > range.size()) {
     return {0, {}};
   }
   range.reset(range.begin(), header->dataLength);
@@ -187,6 +197,13 @@ RecordInfo validateRecord(ByteRange range, uint32_t fileId) {
     return {0, {}};
   }
   return {header->fileId, range};
+}
+
+RecordInfo validateRecord(ByteRange range, uint32_t fileId) {
+  if (!validateRecordHeader(range, fileId)) {
+    return {0, {}};
+  }
+  return validateRecordData(range);
 }
 
 RecordInfo

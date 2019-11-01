@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -325,6 +325,8 @@ TEST(Observer, SubscribeCallback) {
     EXPECT_EQ(3, getCallsStart);
     EXPECT_EQ(3, getCallsFinish);
 
+    folly::observer_detail::ObserverManager::waitForAllUpdates();
+
     slowGet = true;
     cobThread = std::thread([] { updatesCob(); });
     /* sleep override */ std::this_thread::sleep_for(std::chrono::seconds{1});
@@ -428,4 +430,47 @@ TEST(Observer, IgnoreUpdates) {
   observable.setValue(46);
   folly::observer_detail::ObserverManager::waitForAllUpdates();
   EXPECT_EQ(3, callbackCalled);
+}
+
+TEST(Observer, GetSnapshotOnManagerThread) {
+  auto observer42 = folly::observer::makeObserver([] { return 42; });
+
+  folly::observer::SimpleObservable<int> observable(1);
+
+  folly::Baton<> startBaton;
+  folly::Baton<> finishBaton;
+  folly::Baton<> destructorBaton;
+
+  {
+    finishBaton.post();
+    auto slowObserver = folly::observer::makeObserver(
+        [guard = folly::makeGuard([observer42, &destructorBaton]() {
+           // We expect this to be called on a ObserverManager thread, but
+           // outside of processing an observer updates.
+           observer42.getSnapshot();
+           destructorBaton.post();
+         }),
+         observer = observable.getObserver(),
+         &startBaton,
+         &finishBaton] {
+          startBaton.post();
+          finishBaton.wait();
+          finishBaton.reset();
+          return **observer;
+        });
+
+    EXPECT_EQ(1, **slowObserver);
+
+    startBaton.reset();
+    finishBaton.post();
+    observable.setValue(2);
+    folly::observer_detail::ObserverManager::waitForAllUpdates();
+    EXPECT_EQ(2, **slowObserver);
+
+    startBaton.reset();
+    observable.setValue(3);
+    startBaton.wait();
+  }
+  finishBaton.post();
+  destructorBaton.wait();
 }

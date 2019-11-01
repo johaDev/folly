@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <algorithm>
@@ -52,6 +53,15 @@ namespace folly {
  * ensureJoined() is called on add(), such that we can join idle
  * threads that were destroyed (which can't be joined from
  * themselves).
+ *
+ * Thread pool stats accounting:
+ *
+ * Derived classes must register instances to keep stats on all thread
+ * pools by calling registerThreadPoolExecutor(this) on constructions
+ * and deregisterThreadPoolExecutor(this) on destruction.
+ *
+ * Registration must be done wherever getPendingTaskCountImpl is implemented
+ * and getPendingTaskCountImpl should be marked 'final' to avoid data races.
  */
 class ThreadPoolExecutor : public DefaultKeepAliveExecutor {
  public:
@@ -167,8 +177,7 @@ class ThreadPoolExecutor : public DefaultKeepAliveExecutor {
 
   struct TaskStatsCallbackRegistry;
 
-  struct alignas(hardware_destructive_interference_size) Thread
-      : public ThreadHandle {
+  struct alignas(folly::cacheline_align_v) Thread : public ThreadHandle {
     explicit Thread(ThreadPoolExecutor* pool)
         : id(nextId++),
           handle(),
@@ -223,6 +232,9 @@ class ThreadPoolExecutor : public DefaultKeepAliveExecutor {
   virtual ThreadPtr makeThread() {
     return std::make_shared<Thread>(this);
   }
+
+  static void registerThreadPoolExecutor(ThreadPoolExecutor* tpe);
+  static void deregisterThreadPoolExecutor(ThreadPoolExecutor* tpe);
 
   // Prerequisite: threadListLock_ readlocked or writelocked
   virtual size_t getPendingTaskCountImpl() const = 0;

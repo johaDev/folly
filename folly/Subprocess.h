@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * Subprocess library, modeled after Python's subprocess module
  * (http://docs.python.org/2/library/subprocess.html)
@@ -94,13 +95,9 @@
 
 #include <signal.h>
 #include <sys/types.h>
-
-#if __APPLE__
 #include <sys/wait.h>
-#else
-#include <wait.h>
-#endif
 
+#include <chrono>
 #include <exception>
 #include <string>
 #include <vector>
@@ -388,7 +385,13 @@ class Subprocess {
 
 #if __linux__
     /**
-     * Child will receive a signal when the parent exits.
+     * Child will receive a signal when the parent *thread* exits.
+     *
+     * This is especially important when this option is used but the calling
+     * thread does not block for the duration of the subprocess. If the original
+     * thread that created the subprocess ends then the subprocess will
+     * terminate. For example, thread pool executors which can reap unused
+     * threads may trigger this behavior.
      */
     Options& parentDeathSignal(int sig) {
       parentDeathSignal_ = sig;
@@ -590,7 +593,7 @@ class Subprocess {
   /**
    * Wait for the process to terminate and return its status.  Like poll(),
    * the only exception this can throw is std::logic_error if you call this
-   * on a Subprocess whose status is RUNNING.  Aborts on egregious
+   * on a Subprocess whose status is not RUNNING.  Aborts on egregious
    * violations of contract, like an out-of-band waitpid(p.pid(), 0, 0).
    */
   ProcessReturnCode wait();
@@ -599,6 +602,16 @@ class Subprocess {
    * Wait for the process to terminate, throw if unsuccessful.
    */
   void waitChecked();
+
+  using TimeoutDuration = std::chrono::milliseconds;
+
+  /**
+   * Call `waitpid` non-blockingly up to `timeout`. Throws std::logic_error if
+   * called on a Subprocess whose status is not RUNNING.
+   *
+   * The return code will be running() if waiting timed out.
+   */
+  ProcessReturnCode waitTimeout(TimeoutDuration timeout);
 
   /**
    * Send a signal to the child.  Shortcuts for the commonly used Unix
@@ -611,6 +624,23 @@ class Subprocess {
   void kill() {
     sendSignal(SIGKILL);
   }
+
+  /**
+   * Call `waitpid` non-blockingly up to `waitTimeout`. If the process hasn't
+   * terminated after that, fall back on `terminateOrKill` with
+   * `sigtermTimeoutSeconds`.
+   */
+  ProcessReturnCode waitOrTerminateOrKill(
+      TimeoutDuration waitTimeout,
+      TimeoutDuration sigtermTimeout);
+
+  /**
+   * Send the SIGTERM to terminate the process, poll `waitpid` non-blockingly
+   * several times up to `sigtermTimeout`. If the process hasn't terminated
+   * after that, send SIGKILL to kill the process and call `waitpid` blockingly.
+   * Return the exit code of process.
+   */
+  ProcessReturnCode terminateOrKill(TimeoutDuration sigtermTimeout);
 
   ////
   //// The methods below only affect the process's communication pipes, but

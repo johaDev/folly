@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -221,21 +221,40 @@ struct BasePolicy
         KeyEqualHolder{std::move(rhs.keyEqual())},
         AllocHolder{alloc} {}
 
+ private:
+  template <typename Src>
+  void maybeAssignAlloc(std::true_type, Src&& src) {
+    alloc() = std::forward<Src>(src);
+  }
+
+  template <typename Src>
+  void maybeAssignAlloc(std::false_type, Src&&) {}
+
+  template <typename A>
+  void maybeSwapAlloc(std::true_type, A& rhs) {
+    using std::swap;
+    swap(alloc(), rhs);
+  }
+
+  template <typename A>
+  void maybeSwapAlloc(std::false_type, A&) {}
+
+ public:
   BasePolicy& operator=(BasePolicy const& rhs) {
     hasher() = rhs.hasher();
     keyEqual() = rhs.keyEqual();
-    if (AllocTraits::propagate_on_container_copy_assignment::value) {
-      alloc() = rhs.alloc();
-    }
+    maybeAssignAlloc(
+        typename AllocTraits::propagate_on_container_copy_assignment{},
+        rhs.alloc());
     return *this;
   }
 
   BasePolicy& operator=(BasePolicy&& rhs) noexcept {
     hasher() = std::move(rhs.hasher());
     keyEqual() = std::move(rhs.keyEqual());
-    if (AllocTraits::propagate_on_container_move_assignment::value) {
-      alloc() = std::move(rhs.alloc());
-    }
+    maybeAssignAlloc(
+        typename AllocTraits::propagate_on_container_move_assignment{},
+        std::move(rhs.alloc()));
     return *this;
   }
 
@@ -243,9 +262,8 @@ struct BasePolicy
     using std::swap;
     swap(hasher(), rhs.hasher());
     swap(keyEqual(), rhs.keyEqual());
-    if (AllocTraits::propagate_on_container_swap::value) {
-      swap(alloc(), rhs.alloc());
-    }
+    maybeSwapAlloc(
+        typename AllocTraits::propagate_on_container_swap{}, rhs.alloc());
   }
 
   Hasher& hasher() {
@@ -381,7 +399,7 @@ struct BasePolicy
   }
 
   void afterDestroyWithoutDeallocate(Value* addr, std::size_t n) {
-    if (kIsSanitizeAddress) {
+    if (kIsLibrarySanitizeAddress) {
       memset(static_cast<void*>(addr), 0x66, sizeof(Value) * n);
     }
   }
@@ -568,6 +586,10 @@ class ValueContainerPolicy : public BasePolicy<
   // buildArgForItem(Item&)&& is used when moving between unequal allocators
   decltype(auto) buildArgForItem(Item& item) && {
     return Super::moveValue(item);
+  }
+
+  Value const& valueAtItem(Item const& item) const {
+    return item;
   }
 
   Value&& valueAtItemForExtract(Item& item) {
@@ -818,6 +840,10 @@ class NodeContainerPolicy
     return Super::moveValue(*item);
   }
 
+  Value const& valueAtItem(Item const& item) const {
+    return *item;
+  }
+
   Value&& valueAtItemForExtract(Item& item) {
     return std::move(*item);
   }
@@ -831,7 +857,9 @@ class NodeContainerPolicy
     auto p = std::addressof(**itemAddr);
     // TODO(T31574848): clean up assume-s used to optimize placement new
     assume(p != nullptr);
+    auto rollback = makeGuard([&] { AllocTraits::deallocate(a, p, 1); });
     AllocTraits::construct(a, p, std::forward<Args>(args)...);
+    rollback.dismiss();
   }
 
   void moveItemDuringRehash(Item* itemAddr, Item& src) {
@@ -1159,6 +1187,10 @@ class VectorContainerPolicy : public BasePolicy<
     return {item};
   }
 
+  Value const& valueAtItem(Item const& item) const {
+    return values_[item];
+  }
+
   Value&& valueAtItemForExtract(Item& item) {
     return std::move(values_[item]);
   }
@@ -1360,7 +1392,7 @@ class VectorContainerPolicy : public BasePolicy<
             &*outChunkAllocation + valuesOffset(chunkAllocSize))));
 
     if (size > 0) {
-      Alloc& a{this->alloc()};
+      Alloc& a = this->alloc();
       transfer(a, std::addressof(before[0]), std::addressof(after[0]), size);
     }
 

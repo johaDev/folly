@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,32 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <exception>
 
+#include <folly/experimental/pushmi/traits.h>
+
 namespace folly {
 namespace pushmi {
-namespace detail {
-// inherit: a class that inherits from a bunch of bases
-template <class... Ts>
-struct inherit : Ts... {
-  inherit() = default;
-  constexpr inherit(Ts... ts)
-    : Ts((Ts&&) ts)...
-  {}
-};
-template <class T>
-struct inherit<T> : T {
-  inherit() = default;
-  explicit constexpr inherit(T t)
-    : T((T&&) t)
-  {}
-};
-template <>
-struct inherit<>
-{};
-} // namespace detail
 
 namespace awaitable_senders {
 struct sender_adl_hook {

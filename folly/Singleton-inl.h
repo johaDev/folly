@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -140,6 +140,12 @@ folly::ReadMostlySharedPtr<T> SingletonHolder<T>::try_get_fast() {
   }
 
   return instance_weak_fast_.lock();
+}
+
+template <typename T>
+template <typename Func>
+invoke_result_t<Func, T*> detail::SingletonHolder<T>::apply(Func f) {
+  return f(try_get().get());
 }
 
 template <typename T>

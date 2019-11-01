@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -372,23 +372,23 @@ void printResultComparison(
  * friends below.
  */
 
-#define BENCHMARK_IMPL(funName, stringName, rv, paramType, paramName) \
-  static void funName(paramType);                                     \
-  static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) =           \
-      (::folly::addBenchmark(                                         \
-           __FILE__,                                                  \
-           stringName,                                                \
-           [](paramType paramName) -> unsigned {                      \
-             funName(paramName);                                      \
-             return rv;                                               \
-           }),                                                        \
-       true);                                                         \
+#define BENCHMARK_IMPL(funName, stringName, rv, paramType, paramName)          \
+  static void funName(paramType);                                              \
+  FOLLY_MAYBE_UNUSED static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) = \
+      (::folly::addBenchmark(                                                  \
+           __FILE__,                                                           \
+           stringName,                                                         \
+           [](paramType paramName) -> unsigned {                               \
+             funName(paramName);                                               \
+             return rv;                                                        \
+           }),                                                                 \
+       true);                                                                  \
   static void funName(paramType paramName)
 
 #define BENCHMARK_IMPL_COUNTERS(                                               \
     funName, stringName, counters, rv, paramType, paramName)                   \
   static void funName(UserCounters& FOLLY_PP_DETAIL_APPEND_VA_ARG(paramType)); \
-  static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) =                    \
+  FOLLY_MAYBE_UNUSED static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) = \
       (::folly::addBenchmark(                                                  \
            __FILE__,                                                           \
            stringName,                                                         \
@@ -406,14 +406,14 @@ void printResultComparison(
  * number of iterations. Used internally, see BENCHMARK_MULTI and friends
  * below.
  */
-#define BENCHMARK_MULTI_IMPL(funName, stringName, paramType, paramName) \
-  static unsigned funName(paramType);                                   \
-  static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) =             \
-      (::folly::addBenchmark(                                           \
-           __FILE__,                                                    \
-           stringName,                                                  \
-           [](paramType paramName) { return funName(paramName); }),     \
-       true);                                                           \
+#define BENCHMARK_MULTI_IMPL(funName, stringName, paramType, paramName)        \
+  static unsigned funName(paramType);                                          \
+  FOLLY_MAYBE_UNUSED static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) = \
+      (::folly::addBenchmark(                                                  \
+           __FILE__,                                                           \
+           stringName,                                                         \
+           [](paramType paramName) { return funName(paramName); }),            \
+       true);                                                                  \
   static unsigned funName(paramType paramName)
 
 /**
@@ -657,9 +657,9 @@ void printResultComparison(
 /**
  * Draws a line of dashes.
  */
-#define BENCHMARK_DRAW_LINE()                                                \
-  static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) =                  \
-      (::folly::addBenchmark(__FILE__, "-", []() -> unsigned { return 0; }), \
+#define BENCHMARK_DRAW_LINE()                                                  \
+  FOLLY_MAYBE_UNUSED static bool FB_ANONYMOUS_VARIABLE(follyBenchmarkUnused) = \
+      (::folly::addBenchmark(__FILE__, "-", []() -> unsigned { return 0; }),   \
        true)
 
 /**

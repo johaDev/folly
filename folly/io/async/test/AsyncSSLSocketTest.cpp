@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/io/async/test/AsyncSSLSocketTest.h>
 
 #include <folly/SocketAddress.h>
@@ -205,6 +206,49 @@ TEST(AsyncSSLSocketTest, ConnectWriteReadClose) {
   // read()
   uint8_t readbuf[128];
   uint32_t bytesRead = socket->readAll(readbuf, sizeof(readbuf));
+  EXPECT_EQ(bytesRead, 128);
+  EXPECT_EQ(memcmp(buf, readbuf, bytesRead), 0);
+
+  // close()
+  socket->close();
+
+  cerr << "ConnectWriteReadClose test completed" << endl;
+  EXPECT_EQ(socket->getSSLSocket()->getTotalConnectTimeout().count(), 10000);
+}
+
+/**
+ * Same as above simple test, but with a large read len to test
+ * clamping behavior.
+ */
+TEST(AsyncSSLSocketTest, ConnectWriteReadLargeClose) {
+  // Start listening on a local port
+  WriteCallbackBase writeCallback;
+  ReadCallback readCallback(&writeCallback);
+  HandshakeCallback handshakeCallback(&readCallback);
+  SSLServerAcceptCallback acceptCallback(&handshakeCallback);
+  TestSSLServer server(&acceptCallback);
+
+  // Set up SSL context.
+  std::shared_ptr<SSLContext> sslContext(new SSLContext());
+  sslContext->ciphers("ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH");
+  // sslContext->loadTrustedCertificates("./trusted-ca-certificate.pem");
+  // sslContext->authenticate(true, false);
+
+  // connect
+  auto socket =
+      std::make_shared<BlockingSocket>(server.getAddress(), sslContext);
+  socket->open(std::chrono::milliseconds(10000));
+
+  // write()
+  uint8_t buf[128];
+  memset(buf, 'a', sizeof(buf));
+  socket->write(buf, sizeof(buf));
+
+  // read()
+  uint8_t readbuf[128];
+  // we will fake the read len but that should be fine
+  size_t readLen = 1L << 33;
+  uint32_t bytesRead = socket->read(readbuf, readLen);
   EXPECT_EQ(bytesRead, 128);
   EXPECT_EQ(memcmp(buf, readbuf, bytesRead), 0);
 
@@ -762,6 +806,114 @@ TEST(AsyncSSLSocketTest, SSLClientTimeoutTest) {
   EXPECT_EQ(client->getHit(), 0);
 
   cerr << "SSLClientTimeoutTest test completed" << endl;
+}
+
+class PerLoopReadCallback : public AsyncTransportWrapper::ReadCallback {
+ public:
+  void getReadBuffer(void** bufReturn, size_t* lenReturn) override {
+    *bufReturn = buf_.data();
+    *lenReturn = buf_.size();
+  }
+
+  void readDataAvailable(size_t len) noexcept override {
+    VLOG(3) << "Read of size: " << len;
+    s_->setReadCB(nullptr);
+    s_->getEventBase()->runInLoop([this]() { s_->setReadCB(this); });
+  }
+
+  void readErr(const AsyncSocketException&) noexcept override {}
+
+  void readEOF() noexcept override {}
+
+  void setSocket(AsyncSocket* s) {
+    s_ = s;
+  }
+
+ private:
+  AsyncSocket* s_;
+  std::array<uint8_t, 1000> buf_;
+};
+
+class CloseNotifyConnector : public AsyncSocket::ConnectCallback {
+ public:
+  CloseNotifyConnector(EventBase* evb, const SocketAddress& addr) {
+    evb_ = evb;
+    ssl_ = AsyncSSLSocket::newSocket(std::make_shared<SSLContext>(), evb_);
+    ssl_->connect(this, addr);
+  }
+
+  void connectSuccess() noexcept override {
+    ssl_->writeChain(nullptr, IOBuf::copyBuffer("hi"));
+    auto ssl = const_cast<SSL*>(ssl_->getSSL());
+    SSL_shutdown(ssl);
+    auto fd = ssl_->detachNetworkSocket();
+    tcp_.reset(new AsyncSocket(evb_, fd), AsyncSocket::Destructor());
+    evb_->runAfterDelay(
+        [this]() {
+          perLoopReads_.setSocket(tcp_.get());
+          tcp_->setReadCB(&perLoopReads_);
+          evb_->runAfterDelay([this]() { tcp_->closeNow(); }, 10);
+        },
+        100);
+  }
+
+  void connectErr(const AsyncSocketException& ex) noexcept override {
+    FAIL() << ex.what();
+  }
+
+ private:
+  EventBase* evb_;
+  std::shared_ptr<AsyncSSLSocket> ssl_;
+  std::shared_ptr<AsyncSocket> tcp_;
+  PerLoopReadCallback perLoopReads_;
+};
+
+class ErrorCheckingWriteCallback : public AsyncSocket::WriteCallback {
+ public:
+  void writeSuccess() noexcept override {}
+
+  void writeErr(size_t, const AsyncSocketException& ex) noexcept override {
+    LOG(ERROR) << "write error: " << ex.what();
+    EXPECT_NE(
+        ex.getType(),
+        AsyncSocketException::AsyncSocketExceptionType::SSL_ERROR);
+  }
+};
+
+class WriteOnEofReadCallback : public ReadCallback {
+ public:
+  using ReadCallback::ReadCallback;
+
+  void readEOF() noexcept override {
+    LOG(INFO) << "Got EOF";
+    auto chain = IOBuf::create(0);
+    for (size_t i = 0; i < 1000 * 1000; i++) {
+      auto buf = IOBuf::create(10);
+      buf->append(10);
+      memset(buf->writableData(), 'x', 10);
+      chain->prependChain(std::move(buf));
+    }
+    socket_->writeChain(&writeCallback_, std::move(chain));
+  }
+
+  void readErr(const AsyncSocketException& ex) noexcept override {
+    LOG(ERROR) << ex.what();
+  }
+
+ private:
+  ErrorCheckingWriteCallback writeCallback_;
+};
+
+TEST(AsyncSSLSocketTest, EarlyCloseNotify) {
+  WriteOnEofReadCallback readCallback(nullptr);
+  HandshakeCallback handshakeCallback(&readCallback);
+  SSLServerAcceptCallback acceptCallback(&handshakeCallback);
+  TestSSLServer server(&acceptCallback);
+
+  EventBase eventBase;
+  CloseNotifyConnector cnc(&eventBase, server.getAddress());
+
+  eventBase.loop();
 }
 
 /**
@@ -2561,7 +2713,7 @@ TEST(AsyncSSLSocketTest, SendMsgParamsCallback) {
 #ifdef FOLLY_HAVE_MSG_ERRQUEUE
 /**
  * Test connecting to, writing to, reading from, and closing the
- * connection to the SSL server.
+ * connection to the SSL server with ancillary data from the application.
  */
 TEST(AsyncSSLSocketTest, SendMsgDataCallback) {
   // This test requires Linux kernel v4.6 or later
@@ -2580,7 +2732,7 @@ TEST(AsyncSSLSocketTest, SendMsgDataCallback) {
   }
 
   // Start listening on a local port
-  SendMsgDataCallback msgCallback;
+  SendMsgAncillaryDataCallback msgCallback;
   WriteCheckTimestampCallback writeCallback(&msgCallback);
   ReadCallback readCallback(&writeCallback);
   HandshakeCallback handshakeCallback(&readCallback);
@@ -2596,11 +2748,17 @@ TEST(AsyncSSLSocketTest, SendMsgDataCallback) {
       std::make_shared<BlockingSocket>(server.getAddress(), sslContext);
   socket->open();
 
-  // Adding MSG_EOR flag to the message flags - it'll trigger
-  // timestamp generation for the last byte of the message.
-  msgCallback.resetFlags(MSG_DONTWAIT | MSG_NOSIGNAL | MSG_EOR);
+  // we'll pass the EOR and TIMESTAMP_TX flags with the write back
+  // EOR tracking must be enabled for WriteFlags be passed
+  const auto writeFlags =
+      folly::WriteFlags::EOR | folly::WriteFlags::TIMESTAMP_TX;
+  readCallback.setWriteFlags(writeFlags);
+  msgCallback.setEorTracking(true);
 
   // Init ancillary data buffer to trigger timestamp notification
+  //
+  // We generate the same ancillary data regardless of the specific WriteFlags,
+  // we verify that the WriteFlags are observed as expected below.
   union {
     uint8_t ctrl_data[CMSG_LEN(sizeof(uint32_t))];
     struct cmsghdr cmsg;
@@ -2615,9 +2773,9 @@ TEST(AsyncSSLSocketTest, SendMsgDataCallback) {
   memcpy(ctrl.data(), u.ctrl_data, CMSG_LEN(sizeof(uint32_t)));
   msgCallback.resetData(std::move(ctrl));
 
-  // write()
+  // write(), including flags
   std::vector<uint8_t> buf(128, 'a');
-  socket->write(buf.data(), buf.size());
+  socket->write(buf.data(), buf.size(), writeFlags);
 
   // read()
   std::vector<uint8_t> readbuf(buf.size());
@@ -2625,17 +2783,116 @@ TEST(AsyncSSLSocketTest, SendMsgDataCallback) {
   EXPECT_EQ(bytesRead, buf.size());
   EXPECT_TRUE(std::equal(buf.begin(), buf.end(), readbuf.begin()));
 
-  writeCallback.checkForTimestampNotifications();
+  // should receive three timestamps (schedule, TX/SND, ACK)
+  // may take some time for all to arrive, so loop to wait
+  //
+  // socket error queue does not have the equivalent of an EOF, so we must
+  // loop on it unless we want to use libevent for this test...
+  const std::vector<int32_t> timestampsExpected = {
+      SCM_TSTAMP_SCHED, SCM_TSTAMP_SND, SCM_TSTAMP_ACK};
+  std::vector<int32_t> timestampsReceived;
+  while (timestampsExpected.size() != timestampsReceived.size()) {
+    const auto timestamps = writeCallback.getTimestampNotifications();
+    timestampsReceived.insert(
+        timestampsReceived.end(), timestamps.begin(), timestamps.end());
+  }
+  EXPECT_THAT(timestampsReceived, ElementsAreArray(timestampsExpected));
+
+  // check the observed write flags
+  EXPECT_EQ(
+      static_cast<std::underlying_type<folly::WriteFlags>::type>(
+          msgCallback.getObservedWriteFlags()),
+      static_cast<std::underlying_type<folly::WriteFlags>::type>(writeFlags));
 
   // close()
   socket->close();
-
   cerr << "SendMsgDataCallback test completed" << endl;
 }
 #endif // FOLLY_HAVE_MSG_ERRQUEUE
 
 #endif
 
+TEST(AsyncSSLSocketTest, TestSNIClientHelloBehavior) {
+  EventBase eventBase;
+  auto serverCtx = std::make_shared<SSLContext>();
+  auto clientCtx = std::make_shared<SSLContext>();
+  serverCtx->loadPrivateKey(kTestKey);
+  serverCtx->loadCertificate(kTestCert);
+
+  clientCtx->setSessionCacheContext("test context");
+  clientCtx->setVerificationOption(SSLContext::SSLVerifyPeerEnum::NO_VERIFY);
+  SSL_SESSION* resumptionSession = nullptr;
+
+  {
+    std::array<NetworkSocket, 2> fds;
+    getfds(fds.data());
+
+    AsyncSSLSocket::UniquePtr clientSock(
+        new AsyncSSLSocket(clientCtx, &eventBase, fds[0], false));
+    AsyncSSLSocket::UniquePtr serverSock(
+        new AsyncSSLSocket(serverCtx, &eventBase, fds[1], true));
+
+    // Client sends SNI that doesn't match anything the server cert advertises
+    clientSock->setServerName("Foobar");
+
+    SSLHandshakeServerParseClientHello server(
+        std::move(serverSock), true, true);
+    SSLHandshakeClient client(std::move(clientSock), true, true);
+    eventBase.loop();
+
+    serverSock = std::move(server).moveSocket();
+    auto chi = serverSock->getClientHelloInfo();
+    ASSERT_NE(chi, nullptr);
+    EXPECT_EQ(
+        std::string("Foobar"), std::string(serverSock->getSSLServerName()));
+
+    // create another client, resuming with the prior session, but under a
+    // different common name.
+    clientSock = std::move(client).moveSocket();
+    resumptionSession = clientSock->getSSLSession();
+  }
+
+  {
+    std::array<NetworkSocket, 2> fds;
+    getfds(fds.data());
+
+    AsyncSSLSocket::UniquePtr clientSock(
+        new AsyncSSLSocket(clientCtx, &eventBase, fds[0], false));
+    AsyncSSLSocket::UniquePtr serverSock(
+        new AsyncSSLSocket(serverCtx, &eventBase, fds[1], true));
+
+    clientSock->setSSLSession(resumptionSession, true);
+    clientSock->setServerName("Baz");
+    SSLHandshakeServerParseClientHello server(
+        std::move(serverSock), true, true);
+    SSLHandshakeClient client(std::move(clientSock), true, true);
+    eventBase.loop();
+
+    serverSock = std::move(server).moveSocket();
+    clientSock = std::move(client).moveSocket();
+    EXPECT_TRUE(clientSock->getSSLSessionReused());
+
+    // OpenSSL 1.1.1 changes the semantics of SSL_get_servername
+    // in
+    // https://github.com/openssl/openssl/commit/1c4aa31d79821dee9be98e915159d52cc30d8403
+    //
+    // Previously, the SNI would be taken from the ClientHello.
+    // Now, the SNI will be taken from the established session.
+    //
+    // But the session that was established with the client (prior handshake)
+    // would not have set the server name field because the SNI that the client
+    // requested ("Foobar") did not match any of the SANs that the server was
+    // presenting ("127.0.0.1")
+    //
+    // To preserve this 1.1.0 behavior, getSSLServerName() should return the
+    // parsed ClientHello servername. This test asserts this behavior.
+    auto sni = serverSock->getSSLServerName();
+    ASSERT_NE(sni, nullptr);
+
+    std::string sniStr(sni);
+    EXPECT_EQ(sniStr, std::string("Baz"));
+  }
+}
 } // namespace folly
 
 #ifdef SIGPIPE

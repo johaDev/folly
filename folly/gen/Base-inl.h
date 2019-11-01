@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,11 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/functional/Invoke.h>
+
+#if FOLLY_USE_RANGEV3
+#include <range/v3/view/filter.hpp>
+#include <range/v3/view/transform.hpp>
+#endif
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
 FOLLY_PUSH_WARNING
@@ -1263,7 +1268,7 @@ class GroupByAdjacent : public Operator<GroupByAdjacent<Selector>> {
 
         if (key == newKey) {
           // grow the current group
-          values.push_back(value);
+          values.push_back(std::forward<Value>(value));
         } else {
           // flush the current group
           GroupType group(key.value(), std::move(values));
@@ -1274,7 +1279,7 @@ class GroupByAdjacent : public Operator<GroupByAdjacent<Selector>> {
           // start a new group
           key.emplace(newKey);
           values.clear();
-          values.push_back(value);
+          values.push_back(std::forward<Value>(value));
         }
         return true;
       });
@@ -2480,7 +2485,118 @@ const T& operator|(const Optional<T>& opt, const Unwrap&) {
   return opt.value();
 }
 
+#if FOLLY_USE_RANGEV3
+template <class RangeV3, class Value>
+class RangeV3Source
+    : public gen::GenImpl<Value, RangeV3Source<RangeV3, Value>> {
+  mutable RangeV3 r_; // mutable since some ranges are not const-iteratable
+
+ public:
+  explicit RangeV3Source(RangeV3 const& r) : r_(r) {}
+
+  template <class Body>
+  void foreach(Body&& body) const {
+    for (auto const& value : r_) {
+      body(value);
+    }
+  }
+
+  template <class Handler>
+  bool apply(Handler&& handler) const {
+    for (auto const& value : r_) {
+      if (!handler(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static constexpr bool infinite = false;
+};
+
+template <class RangeV3, class Value>
+class RangeV3CopySource
+    : public gen::GenImpl<Value, RangeV3CopySource<RangeV3, Value>> {
+  mutable RangeV3 r_; // mutable since some ranges are not const-iteratable
+
+ public:
+  explicit RangeV3CopySource(RangeV3&& r) : r_(std::move(r)) {}
+
+  template <class Body>
+  void foreach(Body&& body) const {
+    for (auto const& value : r_) {
+      body(value);
+    }
+  }
+
+  template <class Handler>
+  bool apply(Handler&& handler) const {
+    for (auto const& value : r_) {
+      if (!handler(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static constexpr bool infinite = false;
+};
+
+struct from_container_fn {
+  template <typename Container>
+  friend auto operator|(Container&& c, from_container_fn) {
+    return gen::from(std::forward<Container>(c));
+  }
+};
+
+struct from_rangev3_fn {
+  template <typename Range>
+  friend auto operator|(Range&& r, from_rangev3_fn) {
+    using DecayedRange = std::decay_t<Range>;
+    using DecayedValue = std::decay_t<decltype(*r.begin())>;
+    return RangeV3Source<DecayedRange, DecayedValue>(r);
+  }
+};
+
+struct from_rangev3_copy_fn {
+  template <typename Range>
+  friend auto operator|(Range&& r, from_rangev3_copy_fn) {
+    using RangeDecay = std::decay_t<Range>;
+    using Value = std::decay_t<decltype(*r.begin())>;
+    return RangeV3CopySource<RangeDecay, Value>(std::move(r));
+  }
+};
+#endif // FOLLY_USE_RANGEV3
 } // namespace detail
+
+#if FOLLY_USE_RANGEV3
+/*
+ ******************************************************************************
+ * Pipe fittings between a container/range-v3 and a folly::gen.
+ * Example: vec | gen::from_container | folly::gen::filter(...);
+ * Example: vec | ranges::views::filter(...) | gen::from_rangev3 | gen::xxx;
+ ******************************************************************************
+ */
+constexpr detail::from_container_fn from_container;
+constexpr detail::from_rangev3_fn from_rangev3;
+constexpr detail::from_rangev3_copy_fn from_rangev3_copy;
+
+template <typename Range>
+auto from_rangev3_call(Range&& r) {
+  using Value = std::decay_t<decltype(*r.begin())>;
+  return detail::RangeV3Source<Range, Value>(r);
+}
+
+// it is safe to pipe an rvalue into a range-v3 view if the rest of the pipeline
+// will finish its traversal within the current full-expr, a condition provided
+// by folly::gen.
+template <typename Range>
+auto rangev3_will_be_consumed(Range&& r) {
+  // intentionally use `r` instead of `std::forward<Range>(r)`; see above.
+  // range-v3 ranges copy in O(1) so it is appropriate.
+  return ranges::views::all(r);
+}
+#endif // FOLLY_USE_RANGEV3
 
 /**
  * VirtualGen<T> - For wrapping template types in simple polymorphic wrapper.

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,6 +24,7 @@
 #include <folly/Conv.h>
 #include <folly/FBString.h>
 #include <folly/container/test/F14TestUtil.h>
+#include <folly/container/test/TrackingTypes.h>
 #include <folly/portability/GTest.h>
 
 template <template <typename, typename, typename, typename, typename>
@@ -36,13 +37,14 @@ void testCustomSwap() {
       int,
       folly::f14::DefaultHasher<int>,
       folly::f14::DefaultKeyEqual<int>,
-      folly::f14::SwapTrackingAlloc<std::pair<int const, int>>>
+      folly::test::SwapTrackingAlloc<std::pair<int const, int>>>
       m0, m1;
-  folly::f14::resetTracking();
+  folly::test::resetTracking();
   swap(m0, m1);
 
   EXPECT_EQ(
-      0, folly::f14::Tracked<0>::counts.dist(folly::f14::Counts{0, 0, 0, 0}));
+      0,
+      folly::test::Tracked<0>::counts().dist(folly::test::Counts{0, 0, 0, 0}));
 }
 
 TEST(F14Map, customSwap) {
@@ -59,6 +61,7 @@ template <
 void runAllocatedMemorySizeTest() {
   using namespace folly::f14;
   using namespace folly::f14::detail;
+  using namespace folly::test;
   using A = SwapTrackingAlloc<std::pair<const K, V>>;
 
   resetTracking();
@@ -71,17 +74,17 @@ void runAllocatedMemorySizeTest() {
     bool preciseAllocInfo = getF14IntrinsicsMode() != F14IntrinsicsMode::None;
 
     if (preciseAllocInfo) {
-      EXPECT_EQ(testAllocatedMemorySize, 0);
+      EXPECT_EQ(testAllocatedMemorySize(), 0);
       EXPECT_EQ(m.getAllocatedMemorySize(), 0);
     }
-    auto emptyMapAllocatedMemorySize = testAllocatedMemorySize;
-    auto emptyMapAllocatedBlockCount = testAllocatedBlockCount;
+    auto emptyMapAllocatedMemorySize = testAllocatedMemorySize();
+    auto emptyMapAllocatedBlockCount = testAllocatedBlockCount();
 
     for (size_t i = 0; i < 1000; ++i) {
       m.insert(std::make_pair(folly::to<K>(i), V{}));
       m.erase(folly::to<K>(i / 10 + 2));
       if (preciseAllocInfo) {
-        EXPECT_EQ(testAllocatedMemorySize, m.getAllocatedMemorySize());
+        EXPECT_EQ(testAllocatedMemorySize(), m.getAllocatedMemorySize());
       }
       EXPECT_GE(m.getAllocatedMemorySize(), sizeof(std::pair<K, V>) * m.size());
       std::size_t size = 0;
@@ -92,22 +95,24 @@ void runAllocatedMemorySizeTest() {
         count += n;
       });
       if (preciseAllocInfo) {
-        EXPECT_EQ(testAllocatedMemorySize, size);
-        EXPECT_EQ(testAllocatedBlockCount, count);
+        EXPECT_EQ(testAllocatedMemorySize(), size);
+        EXPECT_EQ(testAllocatedBlockCount(), count);
       }
     }
 
     m = decltype(m){};
-    EXPECT_EQ(testAllocatedMemorySize, emptyMapAllocatedMemorySize);
-    EXPECT_EQ(testAllocatedBlockCount, emptyMapAllocatedBlockCount);
+    EXPECT_EQ(testAllocatedMemorySize(), emptyMapAllocatedMemorySize);
+    EXPECT_EQ(testAllocatedBlockCount(), emptyMapAllocatedBlockCount);
 
     m.reserve(5);
-    EXPECT_GT(testAllocatedMemorySize, 0);
+    EXPECT_GT(testAllocatedMemorySize(), 0);
     m = {};
-    EXPECT_GT(testAllocatedMemorySize, 0);
+    if (preciseAllocInfo) {
+      EXPECT_GT(testAllocatedMemorySize(), 0);
+    }
   }
-  EXPECT_EQ(testAllocatedMemorySize, 0);
-  EXPECT_EQ(testAllocatedBlockCount, 0);
+  EXPECT_EQ(testAllocatedMemorySize(), 0);
+  EXPECT_EQ(testAllocatedBlockCount(), 0);
 }
 
 template <typename K, typename V>
@@ -180,6 +185,111 @@ TEST(F14FastMap, visitContiguousRanges) {
   runVisitContiguousRangesTest<folly::F14FastMap<int, int>>();
 }
 
+#if FOLLY_HAS_MEMORY_RESOURCE
+TEST(F14Map, pmr_empty) {
+  folly::pmr::F14ValueMap<int, int> m1;
+  folly::pmr::F14NodeMap<int, int> m2;
+  folly::pmr::F14VectorMap<int, int> m3;
+  folly::pmr::F14FastMap<int, int> m4;
+  EXPECT_TRUE(m1.empty() && m2.empty() && m3.empty() && m4.empty());
+}
+#endif
+
+namespace {
+struct NestedHash {
+  template <typename N>
+  std::size_t operator()(N const& v) const;
+};
+
+template <template <class...> class TMap>
+struct Nested {
+  std::unique_ptr<TMap<Nested, int, NestedHash>> map_;
+
+  explicit Nested(int depth)
+      : map_(std::make_unique<TMap<Nested, int, NestedHash>>()) {
+    if (depth > 0) {
+      map_->emplace(Nested{depth - 1}, 0);
+    }
+  }
+};
+
+template <typename N>
+std::size_t NestedHash::operator()(N const& v) const {
+  std::size_t rv = 0;
+  for (auto& kv : *v.map_) {
+    rv += folly::Hash{}(operator()(kv.first), kv.second);
+  }
+  return folly::Hash{}(rv);
+}
+
+template <template <class...> class TMap>
+bool operator==(Nested<TMap> const& lhs, Nested<TMap> const& rhs) {
+  return *lhs.map_ == *rhs.map_;
+}
+
+template <template <class...> class TMap>
+bool operator!=(Nested<TMap> const& lhs, Nested<TMap> const& rhs) {
+  return !(lhs == rhs);
+}
+
+template <template <class...> class TMap>
+void testNestedMapEquality() {
+  auto n1 = Nested<TMap>(100);
+  auto n2 = Nested<TMap>(100);
+  auto n3 = Nested<TMap>(99);
+  EXPECT_TRUE(n1 == n1);
+  EXPECT_TRUE(n1 == n2);
+  EXPECT_FALSE(n1 == n3);
+  EXPECT_FALSE(n1 != n1);
+  EXPECT_FALSE(n1 != n2);
+  EXPECT_TRUE(n1 != n3);
+}
+
+template <template <class...> class TMap>
+void testEqualityRefinement() {
+  TMap<
+      std::pair<int, int>,
+      int,
+      folly::test::HashFirst,
+      folly::test::EqualFirst>
+      m1;
+  TMap<
+      std::pair<int, int>,
+      int,
+      folly::test::HashFirst,
+      folly::test::EqualFirst>
+      m2;
+  m1[std::make_pair(0, 0)] = 0;
+  m1[std::make_pair(1, 1)] = 1;
+  EXPECT_FALSE(m1.insert(std::make_pair(std::make_pair(0, 2), 0)).second);
+  EXPECT_EQ(m1.size(), 2);
+  EXPECT_EQ(m1.count(std::make_pair(0, 10)), 1);
+  for (auto& kv : m1) {
+    m2.emplace(std::make_pair(kv.first.first, kv.first.second + 1), kv.second);
+  }
+  EXPECT_EQ(m1.size(), m2.size());
+  for (auto& kv : m1) {
+    EXPECT_EQ(m2.count(kv.first), 1);
+  }
+  EXPECT_FALSE(m1 == m2);
+  EXPECT_TRUE(m1 != m2);
+}
+} // namespace
+
+TEST(F14Map, nestedMapEquality) {
+  testNestedMapEquality<folly::F14ValueMap>();
+  testNestedMapEquality<folly::F14NodeMap>();
+  testNestedMapEquality<folly::F14VectorMap>();
+  testNestedMapEquality<folly::F14FastMap>();
+}
+
+TEST(F14Map, equalityRefinement) {
+  testEqualityRefinement<folly::F14ValueMap>();
+  testEqualityRefinement<folly::F14NodeMap>();
+  testEqualityRefinement<folly::F14VectorMap>();
+  testEqualityRefinement<folly::F14FastMap>();
+}
+
 ///////////////////////////////////
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 ///////////////////////////////////
@@ -196,6 +306,7 @@ TEST(F14FastMap, visitContiguousRanges) {
 using namespace folly;
 using namespace folly::f14;
 using namespace folly::string_piece_literals;
+using namespace folly::test;
 
 namespace {
 std::string s(char const* p) {
@@ -416,9 +527,9 @@ void runRandom() {
       try {
         EXPECT_EQ(t0.empty(), r0.empty());
         EXPECT_EQ(t0.size(), r0.size());
-        EXPECT_EQ(2, Tracked<0>::counts.liveCount());
-        EXPECT_EQ(t0.size() + t1.size(), Tracked<1>::counts.liveCount());
-        EXPECT_EQ(r0.size() + r1.size(), Tracked<2>::counts.liveCount());
+        EXPECT_EQ(2, Tracked<0>::counts().liveCount());
+        EXPECT_EQ(t0.size() + t1.size(), Tracked<1>::counts().liveCount());
+        EXPECT_EQ(r0.size() + r1.size(), Tracked<2>::counts().liveCount());
         if (pct < 15) {
           // insert
           auto t = t0.insert(std::make_pair(k, v));
@@ -638,7 +749,7 @@ void runRandom() {
     }
   }
 
-  EXPECT_EQ(testAllocatedMemorySize, 0);
+  EXPECT_EQ(testAllocatedMemorySize(), 0);
 }
 
 template <typename T>
@@ -673,6 +784,24 @@ TEST(F14VectorMap, simple) {
 TEST(F14FastMap, simple) {
   runSimple<F14FastMap<std::string, std::string>>();
 }
+
+#if FOLLY_HAS_MEMORY_RESOURCE
+TEST(F14ValueMap, pmr_simple) {
+  runSimple<pmr::F14ValueMap<std::string, std::string>>();
+}
+
+TEST(F14NodeMap, pmr_simple) {
+  runSimple<pmr::F14NodeMap<std::string, std::string>>();
+}
+
+TEST(F14VectorMap, pmr_simple) {
+  runSimple<pmr::F14VectorMap<std::string, std::string>>();
+}
+
+TEST(F14FastMap, pmr_simple) {
+  runSimple<pmr::F14FastMap<std::string, std::string>>();
+}
+#endif
 
 TEST(F14VectorMap, reverse_iterator) {
   using TMap = F14VectorMap<uint64_t, uint64_t>;
@@ -853,61 +982,61 @@ TEST(Tracked, baseline) {
     resetTracking();
     Tracked<0> b0{a0};
     EXPECT_EQ(a0.val_, b0.val_);
-    EXPECT_EQ(sumCounts, (Counts{1, 0, 0, 0}));
-    EXPECT_EQ(Tracked<0>::counts, (Counts{1, 0, 0, 0}));
+    EXPECT_EQ(sumCounts(), (Counts{1, 0, 0, 0}));
+    EXPECT_EQ(Tracked<0>::counts(), (Counts{1, 0, 0, 0}));
   }
   {
     resetTracking();
     Tracked<0> b0{std::move(a0)};
     EXPECT_EQ(a0.val_, b0.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 1, 0, 0}));
-    EXPECT_EQ(Tracked<0>::counts, (Counts{0, 1, 0, 0}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 1, 0, 0}));
+    EXPECT_EQ(Tracked<0>::counts(), (Counts{0, 1, 0, 0}));
   }
   {
     resetTracking();
     Tracked<1> b1{a0};
     EXPECT_EQ(a0.val_, b1.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 1, 0}));
-    EXPECT_EQ(Tracked<1>::counts, (Counts{0, 0, 1, 0}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 1, 0}));
+    EXPECT_EQ(Tracked<1>::counts(), (Counts{0, 0, 1, 0}));
   }
   {
     resetTracking();
     Tracked<1> b1{std::move(a0)};
     EXPECT_EQ(a0.val_, b1.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 0, 1}));
-    EXPECT_EQ(Tracked<1>::counts, (Counts{0, 0, 0, 1}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 0, 1}));
+    EXPECT_EQ(Tracked<1>::counts(), (Counts{0, 0, 0, 1}));
   }
   {
     Tracked<0> b0;
     resetTracking();
     b0 = a0;
     EXPECT_EQ(a0.val_, b0.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 0, 0, 1, 0}));
-    EXPECT_EQ(Tracked<0>::counts, (Counts{0, 0, 0, 0, 1, 0}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 0, 0, 1, 0}));
+    EXPECT_EQ(Tracked<0>::counts(), (Counts{0, 0, 0, 0, 1, 0}));
   }
   {
     Tracked<0> b0;
     resetTracking();
     b0 = std::move(a0);
     EXPECT_EQ(a0.val_, b0.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 0, 0, 0, 1}));
-    EXPECT_EQ(Tracked<0>::counts, (Counts{0, 0, 0, 0, 0, 1}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 0, 0, 0, 1}));
+    EXPECT_EQ(Tracked<0>::counts(), (Counts{0, 0, 0, 0, 0, 1}));
   }
   {
     Tracked<1> b1;
     resetTracking();
     b1 = a0;
     EXPECT_EQ(a0.val_, b1.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 1, 0, 0, 1, 0, 1}));
-    EXPECT_EQ(Tracked<1>::counts, (Counts{0, 0, 1, 0, 0, 1, 0, 1}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 1, 0, 0, 1, 0, 1}));
+    EXPECT_EQ(Tracked<1>::counts(), (Counts{0, 0, 1, 0, 0, 1, 0, 1}));
   }
   {
     Tracked<1> b1;
     resetTracking();
     b1 = std::move(a0);
     EXPECT_EQ(a0.val_, b1.val_);
-    EXPECT_EQ(sumCounts, (Counts{0, 0, 0, 1, 0, 1, 0, 1}));
-    EXPECT_EQ(Tracked<1>::counts, (Counts{0, 0, 0, 1, 0, 1, 0, 1}));
+    EXPECT_EQ(sumCounts(), (Counts{0, 0, 0, 1, 0, 1, 0, 1}));
+    EXPECT_EQ(Tracked<1>::counts(), (Counts{0, 0, 0, 1, 0, 1, 0, 1}));
   }
 }
 
@@ -928,8 +1057,8 @@ void runInsertCases(
     // fresh key, value_type const& ->
     // copy is expected
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{1, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{1, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{1, 0, 0, 0}),
         expectedDist)
         << name << "\n0 -> " << Tracked<0>::counts << "\n1 -> "
         << Tracked<1>::counts;
@@ -942,8 +1071,8 @@ void runInsertCases(
     // fresh key, value_type&& ->
     // key copy is unfortunate but required
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 1, 0, 0}),
+        Tracked<0>::counts().dist(Counts{1, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 1, 0, 0}),
         expectedDist)
         << name << "\n0 -> " << Tracked<0>::counts << "\n1 -> "
         << Tracked<1>::counts;
@@ -956,8 +1085,8 @@ void runInsertCases(
     // fresh key, pair<key_type,mapped_type> const& ->
     // 1 copy is required
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{1, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{1, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{1, 0, 0, 0}),
         expectedDist)
         << name << "\n0 -> " << Tracked<0>::counts << "\n1 -> "
         << Tracked<1>::counts;
@@ -970,8 +1099,8 @@ void runInsertCases(
     // fresh key, pair<key_type,mapped_type>&& ->
     // this is the happy path for insert(make_pair(.., ..))
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 1, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 1, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 1, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 1, 0, 0}),
         expectedDist)
         << name << "\n0 -> " << Tracked<0>::counts << "\n1 -> "
         << Tracked<1>::counts;
@@ -1005,10 +1134,10 @@ void runInsertCases(
     // test, whose test harness copies the original pair and then uses
     // move conversion instead of copy conversion.
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 1, 1, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 1, 0}) +
-            Tracked<2>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<3>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 1, 1, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 1, 0}) +
+            Tracked<2>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<3>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist * 3);
   }
   {
@@ -1022,10 +1151,10 @@ void runInsertCases(
     //   key_src ops: Tracked<2>::counts
     //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 1, 0, 1}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 1}) +
-            Tracked<2>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<3>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 1, 0, 1}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 1}) +
+            Tracked<2>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<3>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
   {
@@ -1036,8 +1165,8 @@ void runInsertCases(
     insertFunc(m, p);
     // duplicate key, value_type const&
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
   {
@@ -1048,8 +1177,8 @@ void runInsertCases(
     insertFunc(m, std::move(p));
     // duplicate key, value_type&&
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
   {
@@ -1060,8 +1189,8 @@ void runInsertCases(
     insertFunc(m, p);
     // duplicate key, pair<key_type,mapped_type> const&
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
   {
@@ -1072,8 +1201,8 @@ void runInsertCases(
     insertFunc(m, std::move(p));
     // duplicate key, pair<key_type,mapped_type>&&
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
   {
@@ -1088,10 +1217,10 @@ void runInsertCases(
     //   key_src ops: Tracked<2>::counts
     //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 1, 0}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<2>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<3>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 1, 0}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<2>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<3>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist * 2);
   }
   {
@@ -1106,10 +1235,10 @@ void runInsertCases(
     //   key_src ops: Tracked<2>::counts
     //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
-        Tracked<0>::counts.dist(Counts{0, 0, 0, 1}) +
-            Tracked<1>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<2>::counts.dist(Counts{0, 0, 0, 0}) +
-            Tracked<3>::counts.dist(Counts{0, 0, 0, 0}),
+        Tracked<0>::counts().dist(Counts{0, 0, 0, 1}) +
+            Tracked<1>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<2>::counts().dist(Counts{0, 0, 0, 0}) +
+            Tracked<3>::counts().dist(Counts{0, 0, 0, 0}),
         expectedDist);
   }
 }
@@ -1229,8 +1358,8 @@ TEST(F14VectorMap, destructuringErase) {
             << Tracked<1>::counts;
   // deleting p1 will cause p2 to be moved to the front of the values array
   EXPECT_EQ(
-      Tracked<0>::counts.dist(Counts{0, 1, 0, 0}) +
-          Tracked<1>::counts.dist(Counts{0, 1, 0, 0}),
+      Tracked<0>::counts().dist(Counts{0, 1, 0, 0}) +
+          Tracked<1>::counts().dist(Counts{0, 1, 0, 0}),
       0);
 }
 
@@ -1238,14 +1367,16 @@ TEST(F14ValueMap, maxSize) {
   F14ValueMap<int, int> m;
   EXPECT_EQ(
       m.max_size(),
-      std::numeric_limits<std::size_t>::max() / sizeof(std::pair<int, int>));
+      std::allocator_traits<decltype(m)::allocator_type>::max_size(
+          m.get_allocator()));
 }
 
 TEST(F14NodeMap, maxSize) {
   F14NodeMap<int, int> m;
   EXPECT_EQ(
       m.max_size(),
-      std::numeric_limits<std::size_t>::max() / sizeof(std::pair<int, int>));
+      std::allocator_traits<decltype(m)::allocator_type>::max_size(
+          m.get_allocator()));
 }
 
 TEST(F14VectorMap, vectorMaxSize) {
@@ -1254,8 +1385,8 @@ TEST(F14VectorMap, vectorMaxSize) {
       m.max_size(),
       std::min(
           std::size_t{std::numeric_limits<uint32_t>::max()},
-          std::numeric_limits<std::size_t>::max() /
-              sizeof(std::pair<int, int>)));
+          std::allocator_traits<decltype(m)::allocator_type>::max_size(
+              m.get_allocator())));
 }
 
 template <typename M>
@@ -1273,27 +1404,33 @@ void runMoveOnlyTest() {
 }
 
 TEST(F14ValueMap, moveOnly) {
-  runMoveOnlyTest<F14ValueMap<f14::MoveOnlyTestInt, int>>();
-  runMoveOnlyTest<F14ValueMap<int, f14::MoveOnlyTestInt>>();
-  runMoveOnlyTest<F14ValueMap<f14::MoveOnlyTestInt, f14::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14ValueMap<folly::test::MoveOnlyTestInt, int>>();
+  runMoveOnlyTest<F14ValueMap<int, folly::test::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14ValueMap<
+      folly::test::MoveOnlyTestInt,
+      folly::test::MoveOnlyTestInt>>();
 }
 
 TEST(F14NodeMap, moveOnly) {
-  runMoveOnlyTest<F14NodeMap<f14::MoveOnlyTestInt, int>>();
-  runMoveOnlyTest<F14NodeMap<int, f14::MoveOnlyTestInt>>();
-  runMoveOnlyTest<F14NodeMap<f14::MoveOnlyTestInt, f14::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14NodeMap<folly::test::MoveOnlyTestInt, int>>();
+  runMoveOnlyTest<F14NodeMap<int, folly::test::MoveOnlyTestInt>>();
+  runMoveOnlyTest<
+      F14NodeMap<folly::test::MoveOnlyTestInt, folly::test::MoveOnlyTestInt>>();
 }
 
 TEST(F14VectorMap, moveOnly) {
-  runMoveOnlyTest<F14VectorMap<f14::MoveOnlyTestInt, int>>();
-  runMoveOnlyTest<F14VectorMap<int, f14::MoveOnlyTestInt>>();
-  runMoveOnlyTest<F14VectorMap<f14::MoveOnlyTestInt, f14::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14VectorMap<folly::test::MoveOnlyTestInt, int>>();
+  runMoveOnlyTest<F14VectorMap<int, folly::test::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14VectorMap<
+      folly::test::MoveOnlyTestInt,
+      folly::test::MoveOnlyTestInt>>();
 }
 
 TEST(F14FastMap, moveOnly) {
-  runMoveOnlyTest<F14FastMap<f14::MoveOnlyTestInt, int>>();
-  runMoveOnlyTest<F14FastMap<int, f14::MoveOnlyTestInt>>();
-  runMoveOnlyTest<F14FastMap<f14::MoveOnlyTestInt, f14::MoveOnlyTestInt>>();
+  runMoveOnlyTest<F14FastMap<folly::test::MoveOnlyTestInt, int>>();
+  runMoveOnlyTest<F14FastMap<int, folly::test::MoveOnlyTestInt>>();
+  runMoveOnlyTest<
+      F14FastMap<folly::test::MoveOnlyTestInt, folly::test::MoveOnlyTestInt>>();
 }
 
 TEST(F14ValueMap, heterogeneousLookup) {
@@ -1428,12 +1565,12 @@ void runHeterogeneousInsertTest() {
   resetTracking();
   EXPECT_EQ(map.count(10), 0);
   EXPECT_FALSE(map.contains(10));
-  EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 0}), 0)
+  EXPECT_EQ(Tracked<1>::counts().dist(Counts{0, 0, 0, 0}), 0)
       << Tracked<1>::counts;
 
   resetTracking();
   map[10] = 20;
-  EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 1}), 0)
+  EXPECT_EQ(Tracked<1>::counts().dist(Counts{0, 0, 0, 1}), 0)
       << Tracked<1>::counts;
 
   resetTracking();
@@ -1447,7 +1584,7 @@ void runHeterogeneousInsertTest() {
   map.insert(
       std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
   map.insert_or_assign(10, 40);
-  EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 0}), 0)
+  EXPECT_EQ(Tracked<1>::counts().dist(Counts{0, 0, 0, 0}), 0)
       << Tracked<1>::counts;
 
   resetTracking();
@@ -1459,13 +1596,13 @@ void runHeterogeneousInsertTest() {
   map.emplace(p);
   map.try_emplace(10, 30);
   map.try_emplace(10);
-  EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 0}), 0)
+  EXPECT_EQ(Tracked<1>::counts().dist(Counts{0, 0, 0, 0}), 0)
       << Tracked<1>::counts;
 
   resetTracking();
   map.erase(10);
   EXPECT_EQ(map.size(), 0);
-  EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 0}), 0)
+  EXPECT_EQ(Tracked<1>::counts().dist(Counts{0, 0, 0, 0}), 0)
       << Tracked<1>::counts;
 }
 
@@ -1792,6 +1929,48 @@ TEST(F14Map, eraseIf) {
   testEraseIf<F14VectorMap>();
   testEraseIf<F14NodeMap>();
   testEraseIf<F14FastMap>();
+}
+
+namespace {
+template <std::size_t N>
+struct DivideBy {
+  // this is a lie for testing purposes
+  using folly_is_avalanching = std::true_type;
+
+  std::size_t operator()(std::size_t v) const {
+    return v / N;
+  }
+};
+} // namespace
+
+template <template <class...> class TMap>
+void testCopyAfterRemovedCollisions() {
+  // Insert 11 things into chunks 0, 1, and 2, 15 into chunk 3, then
+  // remove all but the last one from chunk 1 and see if we can find that
+  // one in a copy of the map.
+  TMap<std::size_t, bool, DivideBy<16>> map;
+  map.reserve(48);
+  for (std::size_t k = 0; k < 11; ++k) {
+    map[k] = true;
+    map[k + 16] = true;
+    map[k + 32] = true;
+  }
+  for (std::size_t k = 0; k < 14; ++k) {
+    map[k + 48] = true;
+  }
+  map[14 + 48] = true;
+  for (std::size_t k = 0; k < 14; ++k) {
+    map.erase(k + 48);
+  }
+  auto copy = map;
+  EXPECT_EQ(copy.count(14 + 48), 1);
+}
+
+TEST(F14Map, copyAfterRemovedCollisions) {
+  testCopyAfterRemovedCollisions<F14ValueMap>();
+  testCopyAfterRemovedCollisions<F14VectorMap>();
+  testCopyAfterRemovedCollisions<F14NodeMap>();
+  testCopyAfterRemovedCollisions<F14FastMap>();
 }
 
 ///////////////////////////////////

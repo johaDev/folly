@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/experimental/pushmi/sender/flow_sender.h>
@@ -130,8 +131,8 @@ struct flow_from_up {
       make_receiver([p = p_, requested](auto) {
         auto remaining = requested;
         // this loop is structured to work when there is
-        // re-entrancy out.value in the loop may call up.value.
-        // to handle this the state of p->c must be captured and
+        // re-entrancy. out.value in the loop may call up.value.
+        // to handle this, the state of p->c must be captured and
         // the remaining and p->c must be changed before
         // out.value is called.
         while (remaining-- > 0 && !p->stop && p->c != p->end) {

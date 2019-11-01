@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -117,12 +117,18 @@ constexpr bool kIsArchPPC64 = FOLLY_PPC64 == 1;
 namespace folly {
 
 /**
- * folly::kIsSanitizeAddress reports if folly was compiled with ASAN
+ * folly::kIsLibrarySanitizeAddress reports if folly was compiled with ASAN
  * enabled.  Note that for compilation units outside of folly that include
- * folly/Portability.h, the value of kIsSanitizeAddress may be different
+ * folly/Portability.h, the value of kIsLibrarySanitizeAddress may be different
  * from whether or not the current compilation unit is being compiled with ASAN.
  */
-#if FOLLY_ASAN_ENABLED
+#if FOLLY_LIBRARY_SANITIZE_ADDRESS
+constexpr bool kIsLibrarySanitizeAddress = true;
+#else
+constexpr bool kIsLibrarySanitizeAddress = false;
+#endif
+
+#if FOLLY_SANITIZE_ADDRESS
 constexpr bool kIsSanitizeAddress = true;
 #else
 constexpr bool kIsSanitizeAddress = false;
@@ -202,11 +208,6 @@ constexpr bool kIsSanitize = false;
 #define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS /* empty */
 #endif
 
-// Globally disable -Wshadow for gcc < 5.
-#if __GNUC__ == 4 && !__clang__
-FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS
-#endif
-
 /* Platform specific TLS support
  * gcc implements __thread
  * msvc implements __declspec(thread)
@@ -221,8 +222,11 @@ FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS
 #error cannot define platform specific thread local storage
 #endif
 
-#if FOLLY_MOBILE
+// disable FOLLY_TLS on 32 bit Apple/iOS
+#if defined(__APPLE__) && FOLLY_MOBILE
+#if (__SIZEOF_POINTER__ == 4)
 #undef FOLLY_TLS
+#endif
 #endif
 
 // It turns out that GNU libstdc++ and LLVM libc++ differ on how they implement
@@ -253,16 +257,21 @@ FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS
 #ifdef _MSC_VER
 #include <folly/portability/SysTypes.h>
 
-// compiler specific to compiler specific
-// nolint
-#define __PRETTY_FUNCTION__ __FUNCSIG__
-
 // Hide a GCC specific thing that breaks MSVC if left alone.
 #define __extension__
 
 // We have compiler support for the newest of the new, but
 // MSVC doesn't tell us that.
+//
+// Clang pretends to be MSVC on Windows, but it refuses to compile
+// SSE4.2 intrinsics unless -march argument is specified.
+// So cannot unconditionally define __SSE4_2__ in clang.
+#ifndef __clang__
 #define __SSE4_2__ 1
+// compiler specific to compiler specific
+// nolint
+#define __PRETTY_FUNCTION__ __FUNCSIG__
+#endif
 
 #endif
 
@@ -417,6 +426,12 @@ constexpr auto kIsGlibcxx = true;
 constexpr auto kIsGlibcxx = false;
 #endif
 
+#if __GLIBCXX__ && _GLIBCXX_RELEASE // major version, 7+
+constexpr auto kGlibcxxVer = _GLIBCXX_RELEASE;
+#else
+constexpr auto kGlibcxxVer = 0;
+#endif
+
 #if _LIBCPP_VERSION
 constexpr auto kIsLibcpp = true;
 #else
@@ -477,6 +492,9 @@ constexpr auto kCpplibVer = 0;
 // folly::coro requires C++17 support
 #if __cpp_coroutines >= 201703L && __has_include(<experimental/coroutine>)
 #define FOLLY_HAS_COROUTINES 1
+// This is mainly to workaround bugs triggered by LTO, when stack allocated
+// variables in await_suspend end up on a coroutine frame.
+#define FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES FOLLY_NOINLINE
 #elif _MSC_VER && _RESUMABLE_FUNCTIONS_SUPPORTED
 // NOTE: MSVC 2017 does not currently support the full Coroutines TS since it
 // does not yet support symmetric-transfer.
@@ -487,6 +505,14 @@ constexpr auto kCpplibVer = 0;
 #if __cpp_noexcept_function_type >= 201510 || \
     (_MSC_FULL_VER >= 191225816 && _MSVC_LANG > 201402)
 #define FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE 1
+#endif
+
+#if __cpp_inline_variables >= 201606L
+#define FOLLY_HAS_INLINE_VARIABLES 1
+#define FOLLY_INLINE_VARIABLE inline
+#else
+#define FOLLY_HAS_INLINE_VARIABLES 0
+#define FOLLY_INLINE_VARIABLE
 #endif
 
 // feature test __cpp_lib_string_view is defined in <string>, which is

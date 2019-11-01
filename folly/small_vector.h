@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -459,6 +459,7 @@ class small_vector : public detail::small_vector_base<
  public:
   typedef std::size_t size_type;
   typedef Value value_type;
+  typedef std::allocator<Value> allocator_type;
   typedef value_type& reference;
   typedef value_type const& const_reference;
   typedef value_type* iterator;
@@ -560,6 +561,10 @@ class small_vector : public detail::small_vector_base<
   static constexpr size_type max_size() {
     return !BaseType::kShouldUseHeap ? static_cast<size_type>(MaxInline)
                                      : BaseType::policyMaxSize();
+  }
+
+  allocator_type get_allocator() const {
+    return {};
   }
 
   size_type size() const {
@@ -1265,6 +1270,22 @@ void swap(
     small_vector<T, MaxInline, A, B, C>& a,
     small_vector<T, MaxInline, A, B, C>& b) {
   a.swap(b);
+}
+
+template <class T, std::size_t MaxInline, class A, class B, class C, class U>
+void erase(small_vector<T, MaxInline, A, B, C>& v, U value) {
+  v.erase(std::remove(v.begin(), v.end(), value), v.end());
+}
+
+template <
+    class T,
+    std::size_t MaxInline,
+    class A,
+    class B,
+    class C,
+    class Predicate>
+void erase_if(small_vector<T, MaxInline, A, B, C>& v, Predicate predicate) {
+  v.erase(std::remove_if(v.begin(), v.end(), predicate), v.end());
 }
 
 //////////////////////////////////////////////////////////////////////

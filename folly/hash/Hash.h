@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -38,7 +39,21 @@
 namespace folly {
 namespace hash {
 
-uint64_t hash_128_to_64(const uint64_t upper, const uint64_t lower) noexcept;
+// This is the Hash128to64 function from Google's cityhash (available
+// under the MIT License).  We use it to reduce multiple 64 bit hashes
+// into a single hash.
+inline uint64_t hash_128_to_64(
+    const uint64_t upper,
+    const uint64_t lower) noexcept {
+  // Murmur-inspired hashing.
+  const uint64_t kMul = 0x9ddfea08eb382d69ULL;
+  uint64_t a = (lower ^ upper) * kMul;
+  a ^= (a >> 47);
+  uint64_t b = (upper ^ a) * kMul;
+  b ^= (b >> 47);
+  b *= kMul;
+  return b;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -510,7 +525,7 @@ struct IsAvalanchingHasher<hasher<std::string>, K> : std::true_type {};
 template <typename T>
 struct hasher<T, std::enable_if_t<std::is_enum<T>::value>> {
   size_t operator()(T key) const noexcept {
-    return Hash()(to_underlying_type(key));
+    return Hash()(to_underlying(key));
   }
 };
 
@@ -532,6 +547,33 @@ template <typename... Ts>
 struct hasher<std::tuple<Ts...>> {
   size_t operator()(const std::tuple<Ts...>& key) const {
     return apply(Hash(), key);
+  }
+};
+
+template <typename T>
+struct hasher<T*> {
+  using folly_is_avalanching = hasher<std::uintptr_t>::folly_is_avalanching;
+
+  size_t operator()(T* key) const {
+    return Hash()(bit_cast<std::uintptr_t>(key));
+  }
+};
+
+template <typename T>
+struct hasher<std::unique_ptr<T>> {
+  using folly_is_avalanching = typename hasher<T*>::folly_is_avalanching;
+
+  size_t operator()(const std::unique_ptr<T>& key) const {
+    return Hash()(key.get());
+  }
+};
+
+template <typename T>
+struct hasher<std::shared_ptr<T>> {
+  using folly_is_avalanching = typename hasher<T*>::folly_is_avalanching;
+
+  size_t operator()(const std::shared_ptr<T>& key) const {
+    return Hash()(key.get());
   }
 };
 
@@ -567,22 +609,6 @@ class StdHasher {
 // order-dependent way) for items in the range [first, last);
 // commutative_hash_combine_* hashes values but combines them in an
 // order-independent way to yield a new hash.
-
-// This is the Hash128to64 function from Google's cityhash (available
-// under the MIT License).  We use it to reduce multiple 64 bit hashes
-// into a single hash.
-inline uint64_t hash_128_to_64(
-    const uint64_t upper,
-    const uint64_t lower) noexcept {
-  // Murmur-inspired hashing.
-  const uint64_t kMul = 0x9ddfea08eb382d69ULL;
-  uint64_t a = (lower ^ upper) * kMul;
-  a ^= (a >> 47);
-  uint64_t b = (upper ^ a) * kMul;
-  b ^= (b >> 47);
-  b *= kMul;
-  return b;
-}
 
 template <class Hash, class Value>
 uint64_t commutative_hash_combine_value_generic(

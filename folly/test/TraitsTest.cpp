@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <folly/ScopeGuard.h>
 #include <folly/portability/GTest.h>
@@ -61,6 +62,10 @@ struct F3 : T3 {
 };
 struct F4 : T1 {};
 
+template <class>
+struct A {};
+struct B {};
+
 namespace folly {
 template <>
 struct IsRelocatable<T1> : std::true_type {};
@@ -76,7 +81,7 @@ TEST(Traits, scalars) {
 }
 
 TEST(Traits, containers) {
-  EXPECT_TRUE(IsRelocatable<vector<F1>>::value);
+  EXPECT_FALSE(IsRelocatable<vector<F1>>::value);
   EXPECT_TRUE((IsRelocatable<pair<F1, F1>>::value));
   EXPECT_TRUE((IsRelocatable<pair<T1, T2>>::value));
 }
@@ -390,4 +395,38 @@ TEST(Traits, like) {
   EXPECT_TRUE(
       (std::is_same<like_t<int const volatile&&, char>, char const volatile&&>::
            value));
+}
+
+TEST(Traits, is_instantiation_of) {
+  EXPECT_TRUE((detail::is_instantiation_of_v<A, A<int>>));
+  EXPECT_FALSE((detail::is_instantiation_of_v<A, B>));
+}
+
+TEST(Traits, is_constexpr_default_constructible) {
+  EXPECT_TRUE(is_constexpr_default_constructible_v<int>);
+
+  struct Empty {};
+  EXPECT_TRUE(is_constexpr_default_constructible_v<Empty>);
+
+  struct NonTrivialDtor {
+    ~NonTrivialDtor() {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NonTrivialDtor>);
+
+  struct ConstexprCtor {
+    int x, y;
+    constexpr ConstexprCtor() noexcept : x(7), y(11) {}
+  };
+  EXPECT_TRUE(is_constexpr_default_constructible_v<ConstexprCtor>);
+
+  struct NonConstexprCtor {
+    int x, y;
+    NonConstexprCtor() noexcept : x(7), y(11) {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NonConstexprCtor>);
+
+  struct NoDefaultCtor {
+    constexpr NoDefaultCtor(int, int) noexcept {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NoDefaultCtor>);
 }

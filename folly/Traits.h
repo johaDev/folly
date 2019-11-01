@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,20 +21,10 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <tuple>
 #include <type_traits>
 
 #include <folly/Portability.h>
-
-// libc++ doesn't provide this header, nor does msvc
-#if __has_include(<bits/c++config.h>)
-// This file appears in two locations: inside fbcode and in the
-// libstdc++ source code (when embedding fbstring as std::string).
-// To aid in this schizophrenic use, two macros are defined in
-// c++config.h:
-//   _LIBSTDCXX_FBSTRING - Set inside libstdc++.  This is useful to
-//      gate use inside fbcode v. libstdc++
-#include <bits/c++config.h>
-#endif
 
 #define FOLLY_CREATE_HAS_MEMBER_TYPE_TRAITS(classname, type_name)              \
   template <typename TTheClass_>                                               \
@@ -158,6 +148,64 @@ using bool_constant = std::integral_constant<bool, B>;
 
 template <std::size_t I>
 using index_constant = std::integral_constant<std::size_t, I>;
+
+namespace detail {
+
+/**
+ * A type trait to check if a given type is an instantiation of a class
+ * template.
+ *
+ * Note that this only works with template type parameters. It does not work
+ * with non-type template parameters, template template parameters, or alias
+ * templates.
+ */
+template <template <typename...> class, typename>
+struct is_instantiation_of : std::false_type {};
+template <template <typename...> class C, typename... T>
+struct is_instantiation_of<C, C<T...>> : std::true_type {};
+template <template <typename...> class C, typename T>
+constexpr bool is_instantiation_of_v = is_instantiation_of<C, T>::value;
+
+} // namespace detail
+
+namespace detail {
+
+template <bool, typename T>
+struct is_constexpr_default_constructible_;
+template <typename T>
+struct is_constexpr_default_constructible_<false, T> {
+  using type = std::false_type;
+};
+template <typename T>
+struct is_constexpr_default_constructible_<true, T> {
+  static constexpr int take(T) {
+    return 0;
+  }
+  template <int = take(T{})>
+  static std::true_type sfinae(int);
+  static std::false_type sfinae(...);
+  using type = decltype(sfinae(0));
+};
+
+} // namespace detail
+
+//  is_constexpr_default_constructible
+//  is_constexpr_default_constructible_v
+//
+//  A type trait, with associated variable template, which determines whether
+//  its type parameter is constexpr default-constructible, that is, default-
+//  constructible in a constexpr context.
+//
+//  Instantiations of is_constexpr_default_constructible unambiguously inherit
+//  std::integral_constant<bool, V> for some bool V.
+template <typename T>
+struct is_constexpr_default_constructible
+    : detail::is_constexpr_default_constructible_<
+          std::is_default_constructible<T>::value,
+          T>::type {};
+template <typename T>
+FOLLY_INLINE_VARIABLE constexpr bool is_constexpr_default_constructible_v =
+    is_constexpr_default_constructible<T>::value;
 
 /***
  *  _t
@@ -319,9 +367,6 @@ using aligned_storage_for_t =
 #if defined(__clang__) && !defined(_LIBCPP_VERSION)
 template <class T>
 struct is_trivially_copyable : bool_constant<__is_trivially_copyable(T)> {};
-#elif defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 5
-template <class T>
-struct is_trivially_copyable : std::is_trivial<T> {};
 #else
 template <class T>
 using is_trivially_copyable = std::is_trivially_copyable<T>;
@@ -618,30 +663,6 @@ struct is_transparent : detail::is_transparent_<void, T> {};
   FOLLY_ASSUME_RELOCATABLE(__VA_ARGS__<T1, T2, T3, T4>); \
   }
 
-/**
- * Instantiate FOLLY_ASSUME_FBVECTOR_COMPATIBLE for a few types. It is
- * safe to assume that pair is compatible if both of its components
- * are. Furthermore, all STL containers can be assumed to comply,
- * although that is not guaranteed by the standard.
- */
-
-FOLLY_NAMESPACE_STD_BEGIN
-
-template <class T, class U>
-struct pair;
-template <class T, class A>
-class vector;
-template <class T, class A>
-class deque;
-template <class T, class C, class A>
-class set;
-template <class K, class V, class C, class A>
-class map;
-template <class T>
-class shared_ptr;
-
-FOLLY_NAMESPACE_STD_END
-
 namespace folly {
 
 // STL commonly-used types
@@ -671,9 +692,8 @@ namespace detail {
 // in order to not prevent all calling code from using it.
 FOLLY_PUSH_WARNING
 FOLLY_GNU_DISABLE_WARNING("-Wsign-compare")
-#if __GNUC_PREREQ(5, 0)
-FOLLY_GNU_DISABLE_WARNING("-Wbool-compare")
-#endif
+FOLLY_GCC_DISABLE_WARNING("-Wbool-compare")
+FOLLY_MSVC_DISABLE_WARNING(4287) // unsigned/negative constant mismatch
 FOLLY_MSVC_DISABLE_WARNING(4388) // sign-compare
 FOLLY_MSVC_DISABLE_WARNING(4804) // bool-compare
 
@@ -741,11 +761,8 @@ bool greater_than(LHS const lhs) {
 
 // Assume nothing when compiling with MSVC.
 #ifndef _MSC_VER
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::vector)
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::deque)
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::unique_ptr)
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::shared_ptr)
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::function)
 #endif
 
 /* Some combinations of compilers and C++ libraries make __int128 and

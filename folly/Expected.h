@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * Like folly::Optional, but can store a value *or* an error.
  *
@@ -51,17 +52,6 @@
 #define FOLLY_REQUIRES_TRAILING(...) , FOLLY_REQUIRES_IMPL(__VA_ARGS__)
 
 #define FOLLY_REQUIRES(...) template <FOLLY_REQUIRES_IMPL(__VA_ARGS__)>
-
-/**
- * gcc-4.7 warns about use of uninitialized memory around the use of storage_
- * even though this is explicitly initialized at each point.
- */
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif // __GNUC__
 
 namespace folly {
 
@@ -223,6 +213,7 @@ struct ExpectedStorage {
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
@@ -417,6 +408,7 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
       case Which::eError:
         this->error().~Error();
         break;
+      case Which::eEmpty:
       default:
         break;
     }
@@ -467,6 +459,7 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
@@ -518,6 +511,7 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
@@ -912,7 +906,7 @@ class Expected final : expected_detail::ExpectedStorage<Value, Error> {
           std::is_constructible<Value, V&&>::value &&
           std::is_constructible<Error, E&&>::value)>
   Expected(Expected<V, E> that) : Base{expected_detail::EmptyTag{}} {
-    *this = std::move(that);
+    this->assign(std::move(that));
   }
 
   FOLLY_REQUIRES(std::is_copy_constructible<Value>::value)
@@ -1405,10 +1399,6 @@ template <class Value, class Error>
 bool operator>(const Value& other, const Expected<Value, Error>&) = delete;
 
 } // namespace folly
-
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 #undef FOLLY_REQUIRES
 #undef FOLLY_REQUIRES_TRAILING

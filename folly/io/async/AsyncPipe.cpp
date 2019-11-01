@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/io/async/AsyncPipe.h>
 
 #include <folly/FileUtil.h>
@@ -55,7 +56,7 @@ void AsyncPipeReader::close() {
   }
 }
 
-#if _WIN32
+#ifdef _WIN32
 static int recv_internal(NetworkSocket s, void* buf, size_t count) {
   auto r = netops::recv(s, buf, count, 0);
   if (r == -1 && WSAGetLastError() == WSAEWOULDBLOCK) {
@@ -115,7 +116,7 @@ void AsyncPipeReader::handlerReady(uint16_t events) noexcept {
     }
 
     // Perform the read
-#if _WIN32
+#ifdef _WIN32
     // On Windows you can't call read on a socket, so call recv instead.
     ssize_t bytesRead =
         folly::fileutil_detail::wrapNoInt(recv_internal, fd_, buf, buflen);
@@ -237,7 +238,7 @@ void AsyncPipeWriter::handlerReady(uint16_t events) noexcept {
   handleWrite();
 }
 
-#if _WIN32
+#ifdef _WIN32
 static int send_internal(NetworkSocket s, const void* buf, size_t count) {
   auto r = netops::send(s, buf, count, 0);
   if (r == -1 && WSAGetLastError() == WSAEWOULDBLOCK) {
@@ -257,7 +258,7 @@ void AsyncPipeWriter::handleWrite() {
     // someday, support writev.  The logic for partial writes is a bit complex
     const IOBuf* head = curQueue.front();
     CHECK(head->length());
-#if _WIN32
+#ifdef _WIN32
     // On Windows you can't call write on a socket.
     ssize_t rc = folly::fileutil_detail::wrapNoInt(
         send_internal, fd_, head->data(), head->length());

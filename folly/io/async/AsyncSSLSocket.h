@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -526,10 +526,12 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   virtual const char* getNegotiatedCipherName() const;
 
   /**
-   * Get the server name for this SSL connection.
+   * Get the server name for this SSL connection. Returns the SNI sent in the
+   * ClientHello, if enableClientHelloParsing() was called.
+   *
    * Returns the server name used or the constant value "NONE" when no SSL
    * session has been established.
-   * If openssl has no SNI support, throw TTransportException.
+   * If openssl has no SNI support, throw AsyncSocketException.
    */
   const char* getSSLServerName() const;
 
@@ -837,7 +839,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    * applied. If verifyPeer_ was explicitly set either via sslConn/sslAccept,
    * those options override the settings in the underlying SSLContext.
    */
-  void applyVerificationOptions(const ssl::SSLUniquePtr& ssl);
+  bool applyVerificationOptions(const ssl::SSLUniquePtr& ssl);
 
   /**
    * Sets up SSL with a custom write bio which intercepts all writes.
@@ -894,16 +896,31 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   Timeout handshakeTimeout_;
   Timeout connectionTimeout_;
 
-  // The app byte num that we are tracking for the MSG_EOR
+  // The app byte num that we are tracking for EOR.
+  //
   // Only one app EOR byte can be tracked.
+  // See appEorByteWriteFlags_ for details.
   size_t appEorByteNo_{0};
+
+  // The WriteFlags to pass for the app byte num that is tracked for EOR.
+  //
+  // When openssl is about to send appEorByteNo_, these flags will be passed to
+  // the application via the getAncillaryData callback. The application can then
+  // generate a control message containing socket timestamping flags or other
+  // commands that will be included when the corresponding buffer is passed to
+  // the kernel via sendmsg().
+  //
+  // See AsyncSSLSocket::bioWrite (which overrides OpenSSL biowrite).
+  WriteFlags appEorByteWriteFlags_{};
 
   // Try to avoid calling SSL_write() for buffers smaller than this.
   // It doesn't take effect when it is 0.
   size_t minWriteSize_{1500};
 
   // When openssl is about to sendmsg() across the minEorRawBytesNo_,
-  // it will pass MSG_EOR to sendmsg().
+  // it will trigger logic to include an application defined control message.
+  //
+  // See appEorByteWriteFlags_ for details.
   size_t minEorRawByteNo_{0};
 #if FOLLY_OPENSSL_HAS_SNI
   std::shared_ptr<folly::SSLContext> handshakeCtx_;

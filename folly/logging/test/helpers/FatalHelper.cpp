@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/init/Init.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/Stdlib.h>
@@ -56,6 +57,15 @@ DEFINE_bool(
     test_xcheck_eq_evalutates_once,
     false,
     "Test an XCHECK_EQ() statement where the arguments have side effects");
+DEFINE_bool(
+    xcheck_eq_custom_struct,
+    false,
+    "Test an XCHECK_EQ() statement with a custom structure, "
+    "to test log message formatting");
+DEFINE_bool(
+    xcheck_eq_pointers,
+    false,
+    "Test an XCHECK_EQ() statement with pointer arguments");
 
 using folly::LogLevel;
 
@@ -111,6 +121,18 @@ std::string fbLogFatalCheck() {
   // about a missing return statement here.
 }
 
+struct MyStruct {
+  MyStruct(uint32_t a_, uint32_t b_) : a(a_), b(b_) {}
+  uint32_t a;
+  uint32_t b;
+};
+bool operator==(const MyStruct& s1, const MyStruct& s2) {
+  return (s1.a == s2.a) && (s1.b == s2.b);
+}
+bool operator<=(const MyStruct& s1, const MyStruct& s2) {
+  return !(s1 == s2);
+}
+
 /*
  * This is a simple helper program to exercise the LOG(FATAL) functionality.
  */
@@ -147,6 +169,14 @@ int main(int argc, char* argv[]) {
     // and logs that it equals 6 and not 7.
     int x = 5;
     XCHECK_EQ(++x, 7);
+  }
+  if (FLAGS_xcheck_eq_custom_struct) {
+    auto m = MyStruct(1, 0x12abcdef);
+    XCHECK_EQ(MyStruct(1, 2), m);
+  }
+  if (FLAGS_xcheck_eq_pointers) {
+    int localInt = 5;
+    XCHECK_EQ(&argc, &localInt);
   }
 
   // Do the remainder of the work in a separate helper function.

@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <tuple>
@@ -144,7 +145,7 @@ struct set_value_fn {
     std::tuple<VN...> vn_;
     PUSHMI_TEMPLATE(class Out)
     (requires ReceiveValue<Out, VN...>) //
-    void operator()(Out out) {
+    void operator()(Out& out) {
       ::folly::pushmi::apply(
           ::folly::pushmi::set_value,
           std::tuple_cat(std::tuple<Out>{std::move(out)}, std::move(vn_)));
@@ -165,7 +166,7 @@ struct set_error_fn {
     E e_;
     PUSHMI_TEMPLATE(class Out)
     (requires ReceiveError<Out, E>) //
-    void operator()(Out out) {
+    void operator()(Out& out) {
       set_error(out, std::move(e_));
     }
   };
@@ -183,7 +184,7 @@ struct set_done_fn {
   struct impl {
     PUSHMI_TEMPLATE(class Out)
     (requires Receiver<Out>) //
-    void operator()(Out out) {
+    void operator()(Out& out) {
       set_done(out);
     }
   };
@@ -201,7 +202,7 @@ struct set_starting_fn {
     Up up_;
     PUSHMI_TEMPLATE(class Out)
     (requires Receiver<Out>) //
-    void operator()(Out out) {
+    void operator()(Out& out) {
       set_starting(out, std::move(up_));
     }
   };
@@ -308,7 +309,7 @@ struct now_fn {
   struct impl {
     PUSHMI_TEMPLATE(class In)
     (requires TimeExecutor<std::decay_t<In>>) //
-    auto operator()(In&& in) const {
+    auto operator()(In& in) const {
       return ::folly::pushmi::now(in);
     }
   };

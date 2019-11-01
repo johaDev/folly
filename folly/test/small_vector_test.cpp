@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +21,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -362,7 +363,7 @@ TEST(small_vector, InsertNontrivial) {
   class TestClass {
    public:
     // explicit TestClass() = default;
-    explicit TestClass(std::string s) : s(s) {}
+    explicit TestClass(std::string s_) : s(s_) {}
     std::string s;
   };
   folly::small_vector<TestClass> v3(5, TestClass("asd"));
@@ -1161,4 +1162,24 @@ TEST(small_vector, SelfCopyAssignmentForVectorOfPair) {
   test = static_cast<decltype(test)&>(test); // suppress self-assign warning
   EXPECT_EQ(test.size(), 1);
   EXPECT_EQ(test[0].first, 13);
+}
+
+TEST(small_vector, erase) {
+  small_vector<int> v(3);
+  std::iota(v.begin(), v.end(), 1);
+  v.push_back(2);
+  erase(v, 2);
+  ASSERT_EQ(2u, v.size());
+  EXPECT_EQ(1u, v[0]);
+  EXPECT_EQ(3u, v[1]);
+}
+
+TEST(small_vector, erase_if) {
+  small_vector<int> v(6);
+  std::iota(v.begin(), v.end(), 1);
+  erase_if(v, [](const auto& x) { return x % 2 == 0; });
+  ASSERT_EQ(3u, v.size());
+  EXPECT_EQ(1u, v[0]);
+  EXPECT_EQ(3u, v[1]);
+  EXPECT_EQ(5u, v[2]);
 }

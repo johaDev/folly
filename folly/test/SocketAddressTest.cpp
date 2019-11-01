@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -197,6 +197,11 @@ TEST(SocketAddress, SetFromStrings) {
 }
 
 TEST(SocketAddress, EqualityAndHash) {
+  SocketAddress empty1;
+  SocketAddress empty2;
+  EXPECT_EQ(empty1, empty2);
+  EXPECT_EQ(empty1.hash(), empty2.hash());
+
   // IPv4
   SocketAddress local1("127.0.0.1", 1234);
   EXPECT_EQ(local1, local1);

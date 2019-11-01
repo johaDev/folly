@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <atomic>
@@ -273,6 +274,17 @@ class EventBase : public TimeoutManager,
    private:
     Function<void()> f_;
   };
+
+  /**
+   * Create a new EventBase object.
+   *
+   * Same as EventBase(true), which constructs an EventBase that measures time,
+   * except that this also allows the timer granularity to be specified
+   */
+
+  explicit EventBase(std::chrono::milliseconds tickInterval) : EventBase(true) {
+    intervalDuration_ = tickInterval;
+  }
 
   /**
    * Create a new EventBase object.
@@ -648,7 +660,7 @@ class EventBase : public TimeoutManager,
 
   HHWheelTimer& timer() {
     if (!wheelTimer_) {
-      wheelTimer_ = HHWheelTimer::newTimer(this);
+      wheelTimer_ = HHWheelTimer::newTimer(this, intervalDuration_);
     }
     return *wheelTimer_.get();
   }
@@ -826,6 +838,9 @@ class EventBase : public TimeoutManager,
 
   void initNotificationQueue();
 
+  // Tick granularity to wheelTimer_
+  std::chrono::milliseconds intervalDuration_{
+      HHWheelTimer::DEFAULT_TICK_INTERVAL};
   // should only be accessed through public getter
   HHWheelTimer::UniquePtr wheelTimer_;
 

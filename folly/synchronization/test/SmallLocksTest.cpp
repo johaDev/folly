@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,6 +32,7 @@
 #include <folly/portability/GTest.h>
 #include <folly/portability/PThread.h>
 #include <folly/portability/Unistd.h>
+#include <folly/test/TestUtils.h>
 
 using folly::MicroLock;
 using folly::MicroSpinLock;
@@ -188,20 +189,36 @@ TEST(SmallLocks, PicoSpinSigned) {
   }
   EXPECT_EQ(val.getData(), -8);
 }
+
+TEST(SmallLocks, PicoSpinLockThreadSanitizer) {
+  SKIP_IF(!folly::kIsSanitizeThread) << "Enabled in TSAN mode only";
+
+  typedef PicoSpinLock<int16_t, 0> Lock;
+
+  {
+    Lock a;
+    Lock b;
+    a.init(-8);
+    b.init(-8);
+    {
+      std::lock_guard<Lock> ga(a);
+      std::lock_guard<Lock> gb(b);
+    }
+    {
+      std::lock_guard<Lock> gb(b);
+      EXPECT_DEATH(
+          [&]() { std::lock_guard<Lock> ga(a); }(),
+          "Cycle in lock order graph");
+    }
+  }
+}
 #endif
 
 TEST(SmallLocks, RegClobber) {
   TestClobber().go();
 }
 
-FOLLY_PACK_PUSH
-#if defined(__SANITIZE_ADDRESS__) && !defined(__clang__) && \
-    (defined(__GNUC__) || defined(__GNUG__))
-static_assert(sizeof(MicroLock) == 4, "Size check failed");
-#else
 static_assert(sizeof(MicroLock) == 1, "Size check failed");
-#endif
-FOLLY_PACK_POP
 
 namespace {
 
@@ -391,6 +408,57 @@ TEST(SmallLocks, MicroSpinLockStressTestTryLockHardwareConcurrency) {
   auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
   auto threads = std::thread::hardware_concurrency();
   simpleStressTestTryLock<MicroSpinLock>(duration, threads);
+}
+
+TEST(SmallLocksk, MicroSpinLockThreadSanitizer) {
+  SKIP_IF(!folly::kIsSanitizeThread) << "Enabled in TSAN mode only";
+
+  uint8_t val = 0;
+  static_assert(sizeof(uint8_t) == sizeof(MicroSpinLock), "sanity check");
+  // make sure TSAN handles this case too:
+  // same lock but initialized via setting a value
+  for (int i = 0; i < 10; i++) {
+    val = 0;
+    std::lock_guard<MicroSpinLock> g(*reinterpret_cast<MicroSpinLock*>(&val));
+  }
+
+  {
+    MicroSpinLock a;
+    MicroSpinLock b;
+    a.init();
+    b.init();
+    {
+      std::lock_guard<MicroSpinLock> ga(a);
+      std::lock_guard<MicroSpinLock> gb(b);
+    }
+    {
+      std::lock_guard<MicroSpinLock> gb(b);
+      EXPECT_DEATH(
+          [&]() { std::lock_guard<MicroSpinLock> ga(a); }(),
+          "Cycle in lock order graph");
+    }
+  }
+
+  {
+    uint8_t a = 0;
+    uint8_t b = 0;
+    {
+      std::lock_guard<MicroSpinLock> ga(*reinterpret_cast<MicroSpinLock*>(&a));
+      std::lock_guard<MicroSpinLock> gb(*reinterpret_cast<MicroSpinLock*>(&b));
+    }
+
+    a = 0;
+    b = 0;
+    {
+      std::lock_guard<MicroSpinLock> gb(*reinterpret_cast<MicroSpinLock*>(&b));
+      EXPECT_DEATH(
+          [&]() {
+            std::lock_guard<MicroSpinLock> ga(
+                *reinterpret_cast<MicroSpinLock*>(&a));
+          }(),
+          "Cycle in lock order graph");
+    }
+  }
 }
 
 TEST(SmallLocks, PicoSpinLockStressTestTryLockTwoThreads) {

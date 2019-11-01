@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -58,6 +58,7 @@ struct EliasFanoCompressedListBase {
       const EliasFanoCompressedListBase<OtherPointer>& other)
       : size(other.size),
         numLowerBits(other.numLowerBits),
+        upperSizeBytes(other.upperSizeBytes),
         data(other.data),
         skipPointers(reinterpret_cast<Pointer>(other.skipPointers)),
         forwardPointers(reinterpret_cast<Pointer>(other.forwardPointers)),
@@ -69,15 +70,13 @@ struct EliasFanoCompressedListBase {
     return ::free(data.data());
   }
 
-  size_t upperSize() const {
-    return size_t(data.end() - upper);
-  }
-
   size_t size = 0;
   uint8_t numLowerBits = 0;
+  size_t upperSizeBytes = 0;
 
-  // WARNING: EliasFanoCompressedList has no ownership of data. The 7
-  // bytes following the last byte should be readable.
+  // WARNING: EliasFanoCompressedList has no ownership of data. The 7 bytes
+  // following the last byte should be readable if kUpperFirst = false, 8 bytes
+  // otherwise.
   folly::Range<Pointer> data;
 
   Pointer skipPointers = nullptr;
@@ -91,7 +90,8 @@ typedef EliasFanoCompressedListBase<uint8_t*> MutableEliasFanoCompressedList;
 
 template <
     class Value,
-    class SkipValue = size_t,
+    // SkipValue must be wide enough to be able to represent the list length.
+    class SkipValue = uint64_t,
     size_t kSkipQuantum = 0, // 0 = disabled
     size_t kForwardQuantum = 0, // 0 = disabled
     bool kUpperFirst = false>
@@ -297,6 +297,7 @@ struct EliasFanoEncoderV2<
     EliasFanoCompressedListBase<typename Range::iterator> result;
     result.size = size;
     result.numLowerBits = numLowerBits;
+    result.upperSizeBytes = upper;
     result.data = buf.subpiece(0, bytes());
 
     auto advance = [&](size_t n) {
@@ -321,12 +322,12 @@ struct EliasFanoEncoderV2<
   MutableCompressedList allocList() const {
     uint8_t* buf = nullptr;
     // WARNING: Current read/write logic assumes that the 7 bytes
-    // following the last byte of lower and upper sequences are
-    // readable (stored value doesn't matter and won't be changed), so
-    // we allocate additional 7 bytes, but do not include them in size
-    // of returned value.
+    // following the upper bytes and the 8 bytes following the lower bytes
+    // sequences are readable (stored value doesn't matter and won't be
+    // changed), so we allocate additional 8 bytes, but do not include them in
+    // size of returned value.
     if (size > 0) {
-      buf = static_cast<uint8_t*>(malloc(bytes() + 7));
+      buf = static_cast<uint8_t*>(malloc(bytes() + 8));
     }
     folly::MutableByteRange bufRange(buf, bytes());
     return openList(bufRange);
@@ -360,9 +361,10 @@ class UpperBitsReader : ForwardPointers<Encoder::forwardQuantum>,
   }
 
   void reset() {
-    block_ = start_ != nullptr ? folly::loadUnaligned<block_t>(start_) : 0;
-    position_ = std::numeric_limits<SizeType>::max();
-    outer_ = 0;
+    // Pretend the bitvector is prefixed by a block of zeroes.
+    block_ = 0;
+    position_ = static_cast<SizeType>(-1);
+    outer_ = static_cast<OuterType>(-sizeof(block_t));
     value_ = 0;
   }
 
@@ -576,14 +578,17 @@ class UpperBitsReader : ForwardPointers<Encoder::forwardQuantum>,
 
 } // namespace detail
 
-// If kUnchecked = true the caller must guarantee that all the
-// operations return valid elements, i.e., they would never return
-// false if checked.
+// If kUnchecked = true the caller must guarantee that all the operations return
+// valid elements, i.e., they would never return false if checked.
+//
+// If the list length is known to be representable with a type narrower than the
+// SkipValueType used in the format, the reader footprint can be reduced by
+// passing the type as SizeType.
 template <
     class Encoder,
     class Instructions = instructions::Default,
     bool kUnchecked = false,
-    class SizeType = size_t>
+    class SizeType = typename Encoder::SkipValueType>
 class EliasFanoReader {
  public:
   typedef Encoder EncoderType;
@@ -603,8 +608,8 @@ class EliasFanoReader {
       lastValue_ = 0;
       return;
     }
-    ValueType lastUpperValue = ValueType(8 * list.upperSize() - size_);
-    auto it = list.upper + list.upperSize() - 1;
+    ValueType lastUpperValue = ValueType(8 * list.upperSizeBytes - size_);
+    auto it = list.upper + list.upperSizeBytes - 1;
     DCHECK_NE(*it, 0);
     lastUpperValue -= 8 - folly::findLastSet(*it);
     lastValue_ = readLowerPart(size_ - 1) | (lastUpperValue << numLowerBits_);
@@ -754,8 +759,7 @@ class EliasFanoReader {
 
  private:
   // Must hold kInvalidValue + 1 == 0.
-  constexpr static ValueType kInvalidValue =
-      std::numeric_limits<ValueType>::max();
+  constexpr static ValueType kInvalidValue = -1;
 
   bool setDone() {
     value_ = kInvalidValue;

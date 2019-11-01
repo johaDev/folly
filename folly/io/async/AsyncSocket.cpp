@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/io/async/AsyncSocket.h>
 
 #include <folly/ExceptionWrapper.h>
@@ -32,7 +33,13 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/types.h>
+#include <sstream>
 #include <thread>
+
+#if __linux__
+#include <linux/sockios.h>
+#include <sys/ioctl.h>
+#endif
 
 #if FOLLY_HAVE_VLA
 #define FOLLY_HAVE_VLA_01 1
@@ -555,6 +562,11 @@ void AsyncSocket::connect(
             withAddr("failed to set socket option"),
             errnoCopy);
       }
+    }
+
+    // Call preConnect hook if any.
+    if (connectCallback_) {
+      connectCallback_->preConnect(fd_);
     }
 
     // Perform the connect()
@@ -1705,6 +1717,54 @@ int AsyncSocket::setRecvBufSize(size_t bufsize) {
   return 0;
 }
 
+#if __linux__
+size_t AsyncSocket::getSendBufInUse() const {
+  if (fd_ == NetworkSocket()) {
+    std::stringstream issueString;
+    issueString << "AsyncSocket::getSendBufInUse() called on non-open socket "
+                << this << "(state=" << state_ << ")";
+    VLOG(4) << issueString.str();
+    throw std::logic_error(issueString.str());
+  }
+
+  size_t returnValue = 0;
+  if (-1 == ::ioctl(fd_.toFd(), SIOCOUTQ, &returnValue)) {
+    int errnoCopy = errno;
+    std::stringstream issueString;
+    issueString << "Failed to get the tx used bytes on Socket: " << this
+                << "(fd=" << fd_ << ", state=" << state_
+                << "): " << errnoStr(errnoCopy);
+    VLOG(2) << issueString.str();
+    throw std::logic_error(issueString.str());
+  }
+
+  return returnValue;
+}
+
+size_t AsyncSocket::getRecvBufInUse() const {
+  if (fd_ == NetworkSocket()) {
+    std::stringstream issueString;
+    issueString << "AsyncSocket::getRecvBufInUse() called on non-open socket "
+                << this << "(state=" << state_ << ")";
+    VLOG(4) << issueString.str();
+    throw std::logic_error(issueString.str());
+  }
+
+  size_t returnValue = 0;
+  if (-1 == ::ioctl(fd_.toFd(), SIOCINQ, &returnValue)) {
+    std::stringstream issueString;
+    int errnoCopy = errno;
+    issueString << "Failed to get the rx used bytes on Socket: " << this
+                << "(fd=" << fd_ << ", state=" << state_
+                << "): " << errnoStr(errnoCopy);
+    VLOG(2) << issueString.str();
+    throw std::logic_error(issueString.str());
+  }
+
+  return returnValue;
+}
+#endif
+
 int AsyncSocket::setTCPProfile(int profd) {
   if (fd_ == NetworkSocket()) {
     VLOG(4) << "AsyncSocket::setTCPProfile() called on non-open socket " << this
@@ -2838,19 +2898,23 @@ std::ostream& operator<<(
   return os;
 }
 
-std::string AsyncSocket::withAddr(const std::string& s) {
+std::string AsyncSocket::withAddr(folly::StringPiece s) {
   // Don't use addr_ directly because it may not be initialized
   // e.g. if constructed from fd
   folly::SocketAddress peer, local;
   try {
-    getPeerAddress(&peer);
     getLocalAddress(&local);
-  } catch (const std::exception&) {
-    // ignore
   } catch (...) {
     // ignore
   }
-  return s + " (peer=" + peer.describe() + ", local=" + local.describe() + ")";
+  try {
+    getPeerAddress(&peer);
+  } catch (...) {
+    // ignore
+  }
+
+  return folly::to<std::string>(
+      s, " (peer=", peer.describe(), ", local=", local.describe(), ")");
 }
 
 void AsyncSocket::setBufferCallback(BufferCallback* cb) {

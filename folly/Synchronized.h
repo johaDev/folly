@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * This module implements a Synchronized abstraction useful in
  * mutex-based concurrency.
@@ -87,7 +88,7 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
   using ConstWLockedPtr =
       ::folly::LockedPtr<const Subclass, LockPolicyExclusive>;
 
-  using RLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyShared>;
+  using RLockedPtr = ::folly::LockedPtr<Subclass, LockPolicyShared>;
   using ConstRLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyShared>;
 
   using TryWLockedPtr = ::folly::LockedPtr<Subclass, LockPolicyTryExclusive>;
@@ -181,9 +182,13 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
    * validity.)
    */
   template <class Rep, class Period>
-  ConstLockedPtr rlock(
+  RLockedPtr rlock(const std::chrono::duration<Rep, Period>& timeout) {
+    return RLockedPtr(static_cast<Subclass*>(this), timeout);
+  }
+  template <class Rep, class Period>
+  ConstRLockedPtr rlock(
       const std::chrono::duration<Rep, Period>& timeout) const {
-    return ConstLockedPtr(static_cast<const Subclass*>(this), timeout);
+    return ConstRLockedPtr(static_cast<const Subclass*>(this), timeout);
   }
 
   /**
@@ -479,10 +484,6 @@ class SynchronizedBase<Subclass, detail::MutexLevel::UNIQUE> {
  * Supported mutexes that work by default include std::mutex,
  * std::recursive_mutex, std::timed_mutex, std::recursive_timed_mutex,
  * folly::SharedMutex, folly::RWSpinLock, and folly::SpinLock.
- * Include LockTraitsBoost.h to get additional LockTraits specializations to
- * support the following boost mutex types: boost::mutex,
- * boost::recursive_mutex, boost::shared_mutex, boost::timed_mutex, and
- * boost::recursive_timed_mutex.
  */
 template <class T, class Mutex = SharedMutex>
 struct Synchronized : public SynchronizedBase<
@@ -778,6 +779,23 @@ struct Synchronized : public SynchronizedBase<
    */
   T copy() const {
     ConstLockedPtr guard(this);
+    return datum_;
+  }
+
+  /**
+   * Returns a reference to the datum without acquiring a lock.
+   *
+   * Provided as a backdoor for call-sites where it is known safe to be used.
+   * For example, when it is known that only one thread has access to the
+   * Synchronized instance.
+   *
+   * To be used with care - this method explicitly overrides the normal safety
+   * guarantees provided by the rest of the Synchronized API.
+   */
+  T& unsafeGetUnlocked() {
+    return datum_;
+  }
+  const T& unsafeGetUnlocked() const {
     return datum_;
   }
 
@@ -1754,6 +1772,10 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
 #define SYNCHRONIZED_VAR(var) FB_CONCATENATE(SYNCHRONIZED_##var##_, __LINE__)
 
 /**
+ * NOTE: This API is deprecated.  Use lock(), wlock(), rlock() or the withLock
+ * functions instead.  In the future it will be marked with a deprecation
+ * attribute to emit build-time warnings, and then it will be removed entirely.
+ *
  * SYNCHRONIZED is the main facility that makes Synchronized<T>
  * helpful. It is a pseudo-statement that introduces a scope where the
  * object is locked. Inside that scope you get to access the unadorned
@@ -1791,6 +1813,11 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
            SYNCHRONIZED_VAR(state) = true)                            \
     FOLLY_POP_WARNING
 
+/**
+ * NOTE: This API is deprecated.  Use lock(), wlock(), rlock() or the withLock
+ * functions instead.  In the future it will be marked with a deprecation
+ * attribute to emit build-time warnings, and then it will be removed entirely.
+ */
 #define TIMED_SYNCHRONIZED(timeout, ...)                                       \
   if (bool SYNCHRONIZED_VAR(state) = false) {                                  \
   } else                                                                       \
@@ -1806,6 +1833,10 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
            SYNCHRONIZED_VAR(state) = true)
 
 /**
+ * NOTE: This API is deprecated.  Use lock(), wlock(), rlock() or the withLock
+ * functions instead.  In the future it will be marked with a deprecation
+ * attribute to emit build-time warnings, and then it will be removed entirely.
+ *
  * Similar to SYNCHRONIZED, but only uses a read lock.
  */
 #define SYNCHRONIZED_CONST(...)            \
@@ -1814,6 +1845,10 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
       as_const(FB_VA_GLUE(FB_ARG_2_OR_1, (__VA_ARGS__))))
 
 /**
+ * NOTE: This API is deprecated.  Use lock(), wlock(), rlock() or the withLock
+ * functions instead.  In the future it will be marked with a deprecation
+ * attribute to emit build-time warnings, and then it will be removed entirely.
+ *
  * Similar to TIMED_SYNCHRONIZED, but only uses a read lock.
  */
 #define TIMED_SYNCHRONIZED_CONST(timeout, ...) \
@@ -1823,6 +1858,10 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
       as_const(FB_VA_GLUE(FB_ARG_2_OR_1, (__VA_ARGS__))))
 
 /**
+ * NOTE: This API is deprecated.  Use lock(), wlock(), rlock() or the withLock
+ * functions instead.  In the future it will be marked with a deprecation
+ * attribute to emit build-time warnings, and then it will be removed entirely.
+ *
  * Synchronizes two Synchronized objects (they may encapsulate
  * different data). Synchronization is done in increasing address of
  * object order, so there is no deadlock risk.

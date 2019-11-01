@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -76,11 +76,11 @@ class PriorityUnboundedBlockingQueue : public BlockingQueue<T> {
 
  private:
   size_t translatePriority(int8_t const priority) {
-    int8_t const priorities = queue_.priorities();
-    int8_t const value = (priorities - 1) / 2 + priority;
-    int8_t const lo = 0;
-    int8_t const hi = priorities - 1;
-    return hi - constexpr_clamp(value, lo, hi);
+    size_t const priorities = queue_.priorities();
+    assert(priorities <= 255);
+    int8_t const hi = (priorities + 1) / 2 - 1;
+    int8_t const lo = hi - (priorities - 1);
+    return hi - constexpr_clamp(priority, lo, hi);
   }
 
   T dequeue() {

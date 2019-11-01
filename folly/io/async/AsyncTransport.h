@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -52,9 +52,10 @@ enum class WriteFlags : uint32_t {
    */
   CORK = 0x01,
   /*
-   * for a socket that has ACK latency enabled, it will cause the kernel
-   * to fire a TCP ESTATS event when the last byte of the given write call
-   * will be acknowledged.
+   * Used to request timestamping when entire buffer ACKed by remote endpoint.
+   *
+   * How timestamping is performed is implementation specific and may rely on
+   * software or hardware timestamps
    */
   EOR = 0x02,
   /*
@@ -65,12 +66,19 @@ enum class WriteFlags : uint32_t {
    * use msg zerocopy if allowed
    */
   WRITE_MSG_ZEROCOPY = 0x08,
+  /*
+   * Used to request timestamping when entire buffer transmitted by the NIC.
+   *
+   * How timestamping is performed is implementation specific and may rely on
+   * software or hardware timestamps
+   */
+  TIMESTAMP_TX = 0x10,
 };
 
 /*
  * union operator
  */
-inline WriteFlags operator|(WriteFlags a, WriteFlags b) {
+constexpr WriteFlags operator|(WriteFlags a, WriteFlags b) {
   return static_cast<WriteFlags>(
       static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
 }
@@ -78,7 +86,7 @@ inline WriteFlags operator|(WriteFlags a, WriteFlags b) {
 /*
  * compound assignment union operator
  */
-inline WriteFlags& operator|=(WriteFlags& a, WriteFlags b) {
+constexpr WriteFlags& operator|=(WriteFlags& a, WriteFlags b) {
   a = a | b;
   return a;
 }
@@ -86,7 +94,7 @@ inline WriteFlags& operator|=(WriteFlags& a, WriteFlags b) {
 /*
  * intersection operator
  */
-inline WriteFlags operator&(WriteFlags a, WriteFlags b) {
+constexpr WriteFlags operator&(WriteFlags a, WriteFlags b) {
   return static_cast<WriteFlags>(
       static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
 }
@@ -94,7 +102,7 @@ inline WriteFlags operator&(WriteFlags a, WriteFlags b) {
 /*
  * compound assignment intersection operator
  */
-inline WriteFlags& operator&=(WriteFlags& a, WriteFlags b) {
+constexpr WriteFlags& operator&=(WriteFlags& a, WriteFlags b) {
   a = a & b;
   return a;
 }
@@ -102,23 +110,36 @@ inline WriteFlags& operator&=(WriteFlags& a, WriteFlags b) {
 /*
  * exclusion parameter
  */
-inline WriteFlags operator~(WriteFlags a) {
+constexpr WriteFlags operator~(WriteFlags a) {
   return static_cast<WriteFlags>(~static_cast<uint32_t>(a));
 }
 
 /*
  * unset operator
  */
-inline WriteFlags unSet(WriteFlags a, WriteFlags b) {
+constexpr WriteFlags unSet(WriteFlags a, WriteFlags b) {
   return a & ~b;
 }
 
 /*
  * inclusion operator
  */
-inline bool isSet(WriteFlags a, WriteFlags b) {
+constexpr bool isSet(WriteFlags a, WriteFlags b) {
   return (a & b) == b;
 }
+
+/**
+ * Write flags that are specifically for the final write call of a buffer.
+ *
+ * In some cases, buffers passed to send may be coalesced or split by the socket
+ * write handling logic. For instance, a buffer passed to AsyncSSLSocket may be
+ * split across multiple TLS records (and therefore multiple calls to write).
+ *
+ * When a buffer is split up, these flags will only be applied for the final
+ * call to write for that buffer.
+ */
+constexpr WriteFlags kEorRelevantWriteFlags =
+    WriteFlags::EOR | WriteFlags::TIMESTAMP_TX;
 
 /**
  * AsyncTransport defines an asynchronous API for streaming I/O.

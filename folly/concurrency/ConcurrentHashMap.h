@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Optional.h>
@@ -24,10 +25,18 @@
 namespace folly {
 
 /**
- * Based on Java's ConcurrentHashMap
+ * Implementations of high-performance Concurrent Hashmaps that
+ * support erase and update.
  *
  * Readers are always wait-free.
  * Writers are sharded, but take a lock.
+ *
+ * Multithreaded performance beats anything except the lock-free
+ *      atomic maps (AtomicUnorderedMap, AtomicHashMap), BUT only
+ *      if you can perfectly size the atomic maps, and you don't
+ *      need erase().  If you don't know the size in advance or
+ *      your workload frequently calls erase(), this is the
+ *      better choice.
  *
  * The interface is as close to std::unordered_map as possible, but there
  * are a handful of changes:
@@ -53,22 +62,63 @@ namespace folly {
  *   std::unordered_map which iterates over a linked list of elements.
  *   If the table is sparse, this may be more expensive.
  *
- * * rehash policy is a power of two, using supplied factor.
- *
  * * Allocator must be stateless.
  *
- * * ValueTypes without copy constructors will work, but pessimize the
- *   implementation.
+ * 1: ConcurrentHashMap, based on Java's ConcurrentHashMap.
+ *    Very similar to std::unodered_map in performance.
  *
- * Comparisons:
- *      Single-threaded performance is extremely similar to std::unordered_map.
+ * 2: ConcurrentHashMapSIMD, based on F14ValueMap.  If the map is
+ *    larger than the cache size, it has superior performance due to
+ *    vectorized key lookup.
  *
- *      Multithreaded performance beats anything except the lock-free
- *           atomic maps (AtomicUnorderedMap, AtomicHashMap), BUT only
- *           if you can perfectly size the atomic maps, and you don't
- *           need erase().  If you don't know the size in advance or
- *           your workload frequently calls erase(), this is the
- *           better choice.
+ *
+ *
+ * USAGE FAQs
+ *
+ * Q: Is simultaneous iteration and erase() threadsafe?
+ *       Example:
+ *
+ *       ConcurrentHashMap<int, int> map;
+ *
+ *       Thread 1: auto it = map.begin();
+ *                   while (it != map.end()) {
+ *                      // Do something with it
+ *                      it++;
+ *                   }
+ *
+ *       Thread 2:    map.insert(2, 2);  map.erase(2);
+ *
+ * A: Yes, this is safe.  However, the iterating thread is not
+ * garanteed to see (or not see) concurrent insertions and erasures.
+ * Inserts may cause a rehash, but the old table is still valid as
+ * long as any iterator pointing to it exists.
+ *
+ * Q: How do I update an existing object atomically?
+ *
+ * A: assign_if_equal is the recommended way - readers will see the
+ * old value until the new value is completely constructed and
+ * inserted.
+ *
+ * Q: Why does map.erase() not actually destroy elements?
+ *
+ * A: Hazard Pointers are used to improve the performance of
+ * concurrent access.  They can be thought of as a simple Garbage
+ * Collector.  To reduce the GC overhead, a GC pass is only run after
+ * reaching a cetain memory bound.  erase() will remove the element
+ * from being accessed via the map, but actual destruction may happen
+ * later, after iterators that may point to it have been deleted.
+ *
+ * The only guarantee is that a GC pass will be run on map destruction
+ * - no elements will remain after map destruction.
+ *
+ * Q: Are pointers to values safe to access *without* holding an
+ * iterator?
+ *
+ * A: The SIMD version guarantees that references to elements are
+ * stable across rehashes, the non-SIMD version does *not*.  Note that
+ * unless you hold an iterator, you need to ensure there are no
+ * concurrent deletes/updates to that key if you are accessing it via
+ * reference.
  */
 
 template <
@@ -270,6 +320,11 @@ class ConcurrentHashMap {
     return res;
   }
 
+  /*
+   * The bool component will always be true if the map has been updated via
+   * either insertion or assignment. Note that this is different from the
+   * std::map::insert_or_assign interface.
+   */
   template <typename Key, typename Value>
   std::pair<ConstIterator, bool> insert_or_assign(Key&& k, Value&& v) {
     auto segment = pickSegment(k);
@@ -540,7 +595,6 @@ class ConcurrentHashMap {
       if (batch_.compare_exchange_strong(b, newbatch)) {
         b = newbatch;
       } else {
-        newbatch->shutdown_and_reclaim();
         newbatch->~hazptr_obj_batch<Atom>();
         Allocator().deallocate(storage, sizeof(hazptr_obj_batch<Atom>));
       }
@@ -551,8 +605,6 @@ class ConcurrentHashMap {
   void batch_shutdown_cleanup() {
     auto b = batch();
     if (b) {
-      b->shutdown_and_reclaim();
-      hazptr_cleanup_batch_tag(b);
       b->~hazptr_obj_batch<Atom>();
       Allocator().deallocate((uint8_t*)b, sizeof(hazptr_obj_batch<Atom>));
     }

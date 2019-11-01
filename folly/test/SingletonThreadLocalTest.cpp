@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,6 +31,10 @@
 #include <folly/portability/GTest.h>
 
 using namespace folly;
+
+extern "C" int* check() {
+  return &SingletonThreadLocal<int>::get();
+}
 
 namespace {
 static std::atomic<std::size_t> fooCreatedCount{0};
@@ -229,7 +233,7 @@ TEST(SingletonThreadLocalDeathTest, Overload) {
   auto exe = fs::executable_path();
   auto lib = exe.parent_path() / "singleton_thread_local_overload.so";
   auto message = stripLeftMargin(R"MESSAGE(
-    Overloaded folly::SingletonThreadLocal<int, DeathTag, ...> with differing trailing arguments:
+    Overloaded unique instance over <int, DeathTag, ...> with differing trailing arguments:
       folly::SingletonThreadLocal<int, DeathTag, Make1, DeathTag>
       folly::SingletonThreadLocal<int, DeathTag, Make2, DeathTag>
   )MESSAGE");

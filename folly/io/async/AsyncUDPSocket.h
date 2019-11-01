@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -253,6 +253,16 @@ class AsyncUDPSocket : public EventHandler {
   virtual void dontFragment(bool df);
 
   /**
+   * Set Dont-Fragment (DF) but ignore Path MTU.
+   *
+   * On Linux, this sets  IP(V6)_MTU_DISCOVER to IP(V6)_PMTUDISC_PROBE.
+   * This essentially sets DF but ignores Path MTU for this socket.
+   * This may be desirable for apps that has its own PMTU Discovery mechanism.
+   * See http://man7.org/linux/man-pages/man7/ip.7.html for more info.
+   */
+  virtual void setDFAndTurnOffPMTU();
+
+  /**
    * Callback for receiving errors on the UDP sockets
    */
   virtual void setErrMessageCallback(ErrMessageCallback* errMessageCallback);
@@ -281,6 +291,10 @@ class AsyncUDPSocket : public EventHandler {
     return fd_ != NetworkSocket();
   }
 
+  virtual bool isReading() const {
+    return readCallback_ != nullptr;
+  }
+
   virtual void detachEventBase();
 
   virtual void attachEventBase(folly::EventBase* evb);
@@ -290,6 +304,8 @@ class AsyncUDPSocket : public EventHandler {
   int getGSO();
 
   bool setGSO(int val);
+
+  void setTrafficClass(int tclass);
 
  protected:
   virtual ssize_t
@@ -345,6 +361,10 @@ class AsyncUDPSocket : public EventHandler {
 
   // Temp space to receive client address
   folly::SocketAddress clientAddress_;
+
+  // If the socket is connected.
+  folly::SocketAddress connectedAddress_;
+  bool connected_{false};
 
   bool reuseAddr_{false};
   bool reusePort_{false};

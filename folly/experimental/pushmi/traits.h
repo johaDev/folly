@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <type_traits>
@@ -190,6 +191,14 @@ constexpr bool is_v = is_<T, C>::value;
 template <bool B, class T = void>
 using requires_ = std::enable_if_t<B, T>;
 
+template <class T, class Self, class Derived = Self>
+PUSHMI_PP_CONSTRAINED_USING(
+    static_cast<bool>(
+        not DerivedFrom<remove_cvref_t<T>, remove_cvref_t<Derived>> &&
+        not Same<remove_cvref_t<T>, remove_cvref_t<Self>>),
+    not_self_t =,
+    T);
+
 template <bool>
 struct Enable_ {};
 template <>
@@ -218,6 +227,21 @@ using identity_t = typename Enable_<sizeof...(Ts) == 1u>::
 template<class...Ts>
 using identity_or_void_t = typename Enable_<sizeof...(Ts) <= 1u>::
   template _type<FrontOrVoid_<Ts...>>::type;
+
+// inherit: a class that inherits from a bunch of bases
+template <class... Ts>
+struct inherit : Ts... {
+  inherit() = default;
+  constexpr inherit(Ts... ts) : Ts((Ts &&) ts)... {}
+};
+template <class T>
+struct inherit<T> : T {
+  inherit() = default;
+  explicit constexpr inherit(T t) : T((T &&) t) {}
+};
+template <>
+struct inherit<> {};
+
 } // namespace detail
 
 } // namespace pushmi

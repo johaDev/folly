@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -1737,5 +1737,18 @@ TEST(WFBString, compareToStdWStringLong) {
   EXPECT_TRUE(fbB >= stdA);
   EXPECT_TRUE(stdB >= fbB);
   EXPECT_TRUE(fbB >= stdB);
+}
+#endif
+
+#if FOLLY_HAS_STRING_VIEW
+struct custom_traits : public std::char_traits<char> {};
+
+TEST(FBString, convertToStringView) {
+  folly::fbstring s("foo");
+  std::string_view sv = s;
+  EXPECT_EQ(sv, "foo");
+  folly::basic_fbstring<char, custom_traits> s2("bar");
+  std::basic_string_view<char, custom_traits> sv2 = s2;
+  EXPECT_EQ(sv2, "bar");
 }
 #endif

@@ -1,3 +1,17 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 include(CheckCXXSourceCompiles)
 include(CheckIncludeFileCXX)
 include(CheckFunctionExists)
@@ -8,8 +22,6 @@ endif(MSVC)
 find_package(Boost 1.51.0 MODULE
   COMPONENTS
     context
-    chrono
-    date_time
     filesystem
     program_options
     regex
@@ -157,13 +169,13 @@ if(NOT FOLLY_CPP_ATOMIC_BUILTIN)
 endif()
 
 option(
-  FOLLY_ASAN_ENABLED
+  FOLLY_LIBRARY_SANITIZE_ADDRESS
   "Build folly with Address Sanitizer enabled."
   OFF
 )
-if (FOLLY_ASAN_ENABLED)
+if (FOLLY_LIBRARY_SANITIZE_ADDRESS)
   if ("${CMAKE_CXX_COMPILER_ID}" MATCHES GNU)
-    set(FOLLY_ASAN_ENABLED ON)
+    set(FOLLY_LIBRARY_SANITIZE_ADDRESS ON)
     set(FOLLY_ASAN_FLAGS -fsanitize=address,undefined)
     list(APPEND FOLLY_CXX_FLAGS ${FOLLY_ASAN_FLAGS})
     # All of the functions in folly/detail/Sse.cpp are intended to be compiled
@@ -175,7 +187,7 @@ if (FOLLY_ASAN_ENABLED)
       PROPERTIES COMPILE_FLAGS -fno-sanitize=address,undefined
     )
   elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES Clang)
-    set(FOLLY_ASAN_ENABLED ON)
+    set(FOLLY_LIBRARY_SANITIZE_ADDRESS ON)
     set(
       FOLLY_ASAN_FLAGS
       -fno-common

@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -208,6 +208,18 @@ TEST(ManualExecutor, drainsOnDestruction) {
     x.add([&] { ++count; });
   }
   EXPECT_EQ(1, count);
+}
+
+TEST(ManualExecutor, keepAlive) {
+  auto future = [] {
+    ManualExecutor ex;
+    return futures::sleep(std::chrono::milliseconds{100})
+        .via(&ex)
+        .thenValue([](auto) { return 42; })
+        .semi();
+  }();
+  EXPECT_TRUE(future.isReady());
+  EXPECT_EQ(42, std::move(future).get());
 }
 
 TEST(Executor, InlineExecutor) {

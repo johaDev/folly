@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,6 +39,22 @@ class MemoryMapping {
     TRY_LOCK,
     MUST_LOCK,
   };
+
+  struct LockFlags {
+    LockFlags() {}
+
+    bool operator==(const LockFlags& other) const;
+
+    /**
+     * Instead of locking all the pages in the mapping before the call returns,
+     * only lock those that are currently resident and mark the others to be
+     * locked at the time they're populated by their first page fault.
+     *
+     * Uses mlock2(flags=MLOCK_ONFAULT). Requires Linux >= 4.4.
+     */
+    bool lockOnFault = false;
+  };
+
   /**
    * Map a portion of the file indicated by filename in memory, causing SIGABRT
    * on error.
@@ -159,7 +175,7 @@ class MemoryMapping {
   /**
    * Lock the pages in memory
    */
-  bool mlock(LockMode lock);
+  bool mlock(LockMode mode, LockFlags flags = {});
 
   /**
    * Unlock the pages.

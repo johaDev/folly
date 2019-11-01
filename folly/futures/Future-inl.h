@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <thread>
@@ -146,12 +148,12 @@ class CoreCallbackState {
     return makeTryWith([&] { return invoke(std::forward<Args>(args)...); });
   }
 
-  void setTry(Try<T>&& t) {
-    stealPromise().setTry(std::move(t));
+  void setTry(Executor::KeepAlive<>&& keepAlive, Try<T>&& t) {
+    stealPromise().setTry(std::move(keepAlive), std::move(t));
   }
 
-  void setException(exception_wrapper&& ew) {
-    stealPromise().setException(std::move(ew));
+  void setException(Executor::KeepAlive<>&& keepAlive, exception_wrapper&& ew) {
+    setTry(std::move(keepAlive), Try<T>(std::move(ew)));
   }
 
   Promise<T> stealPromise() noexcept {
@@ -204,14 +206,6 @@ template <typename T2>
 FutureBase<T>::FutureBase(
     typename std::enable_if<std::is_same<Unit, T2>::value>::type*)
     : core_(Core::make(Try<T>(T()))) {}
-
-template <class T>
-template <
-    class... Args,
-    typename std::enable_if<std::is_constructible<T, Args&&...>::value, int>::
-        type>
-FutureBase<T>::FutureBase(in_place_t, Args&&... args)
-    : core_(Core::make(in_place, std::forward<Args>(args)...)) {}
 
 template <class T>
 void FutureBase<T>::assign(FutureBase<T>&& other) noexcept {
@@ -315,9 +309,12 @@ void FutureBase<T>::raise(exception_wrapper exception) {
 
 template <class T>
 template <class F>
-void FutureBase<T>::setCallback_(F&& func) {
+void FutureBase<T>::setCallback_(
+    F&& func,
+    futures::detail::InlineContinuation allowInline) {
   throwIfContinued();
-  getCore().setCallback(std::forward<F>(func), RequestContext::saveContext());
+  getCore().setCallback(
+      std::forward<F>(func), RequestContext::saveContext(), allowInline);
 }
 
 template <class T>
@@ -332,22 +329,27 @@ namespace detail_msvc_15_7_workaround {
 template <typename R, std::size_t S>
 using IfArgsSizeIs = std::enable_if_t<R::Arg::ArgsSize::value == S, int>;
 template <typename R, typename State, typename T, IfArgsSizeIs<R, 0> = 0>
-decltype(auto) invoke(R, State& state, Try<T>& /* t */) {
+decltype(auto)
+invoke(R, State& state, Executor::KeepAlive<>&&, Try<T>&& /* t */) {
   return state.invoke();
 }
-template <typename R, typename State, typename T, IfArgsSizeIs<R, 1> = 0>
-decltype(auto) invoke(R, State& state, Try<T>& t) {
-  using Arg0 = typename R::Arg::ArgList::FirstArg;
-  return state.invoke(t.template get<R::Arg::isTry(), Arg0>());
+template <typename R, typename State, typename T, IfArgsSizeIs<R, 2> = 0>
+decltype(auto) invoke(R, State& state, Executor::KeepAlive<>&& ka, Try<T>&& t) {
+  using Arg1 = typename R::Arg::ArgList::Tail::FirstArg;
+  return state.invoke(
+      std::move(ka), std::move(t).template get<R::Arg::isTry(), Arg1>());
 }
 template <typename R, typename State, typename T, IfArgsSizeIs<R, 0> = 0>
-decltype(auto) tryInvoke(R, State& state, Try<T>& /* t */) {
+decltype(auto)
+tryInvoke(R, State& state, Executor::KeepAlive<>&&, Try<T>&& /* t */) {
   return state.tryInvoke();
 }
-template <typename R, typename State, typename T, IfArgsSizeIs<R, 1> = 0>
-decltype(auto) tryInvoke(R, State& state, Try<T>& t) {
-  using Arg0 = typename R::Arg::ArgList::FirstArg;
-  return state.tryInvoke(t.template get<R::Arg::isTry(), Arg0>());
+template <typename R, typename State, typename T, IfArgsSizeIs<R, 2> = 0>
+decltype(auto)
+tryInvoke(R, State& state, Executor::KeepAlive<>&& ka, Try<T>&& t) {
+  using Arg1 = typename R::Arg::ArgList::Tail::FirstArg;
+  return state.tryInvoke(
+      std::move(ka), std::move(t).template get<R::Arg::isTry(), Arg1>());
 }
 } // namespace detail_msvc_15_7_workaround
 
@@ -358,9 +360,11 @@ decltype(auto) tryInvoke(R, State& state, Try<T>& t) {
 template <class T>
 template <typename F, typename R>
 typename std::enable_if<!R::ReturnsFuture::value, typename R::Return>::type
-FutureBase<T>::thenImplementation(F&& func, R) {
-  static_assert(
-      R::Arg::ArgsSize::value <= 1, "Then must take zero/one argument");
+FutureBase<T>::thenImplementation(
+    F&& func,
+    R,
+    futures::detail::InlineContinuation allowInline) {
+  static_assert(R::Arg::ArgsSize::value == 2, "Then must take two arguments");
   typedef typename R::ReturnsFuture::Inner B;
 
   Promise<B> p;
@@ -368,7 +372,7 @@ FutureBase<T>::thenImplementation(F&& func, R) {
 
   // grab the Future now before we lose our handle on the Promise
   auto sf = p.getSemiFuture();
-  sf.setExecutor(this->getExecutor());
+  sf.setExecutor(folly::Executor::KeepAlive<>{this->getExecutor()});
   auto f = Future<B>(sf.core_);
   sf.core_ = nullptr;
 
@@ -403,29 +407,33 @@ FutureBase<T>::thenImplementation(F&& func, R) {
      */
   this->setCallback_(
       [state = futures::detail::makeCoreCallbackState(
-           std::move(p), std::forward<F>(func))](Try<T>&& t) mutable {
+           std::move(p), std::forward<F>(func))](
+          Executor::KeepAlive<>&& ka, Try<T>&& t) mutable {
         if (!R::Arg::isTry() && t.hasException()) {
-          state.setException(std::move(t.exception()));
+          state.setException(std::move(ka), std::move(t.exception()));
         } else {
-          state.setTry(makeTryWith([&] {
-            return detail_msvc_15_7_workaround::invoke(R{}, state, t);
-          }));
+          auto propagateKA = ka.copy();
+          state.setTry(std::move(propagateKA), makeTryWith([&] {
+                         return detail_msvc_15_7_workaround::invoke(
+                             R{}, state, std::move(ka), std::move(t));
+                       }));
         }
-      });
+      },
+      allowInline);
   return f;
 }
 
 // Pass through a simple future as it needs no deferral adaptation
 template <class T>
-Future<T> chainExecutor(Executor*, Future<T>&& f) {
+Future<T> chainExecutor(Executor::KeepAlive<>, Future<T>&& f) {
   return std::move(f);
 }
 
 // Correctly chain a SemiFuture for deferral
 template <class T>
-Future<T> chainExecutor(Executor* e, SemiFuture<T>&& f) {
+Future<T> chainExecutor(Executor::KeepAlive<> e, SemiFuture<T>&& f) {
   if (!e) {
-    e = &InlineExecutor::instance();
+    e = folly::getKeepAliveToken(InlineExecutor::instance());
   }
   return std::move(f).via(e);
 }
@@ -435,9 +443,11 @@ Future<T> chainExecutor(Executor* e, SemiFuture<T>&& f) {
 template <class T>
 template <typename F, typename R>
 typename std::enable_if<R::ReturnsFuture::value, typename R::Return>::type
-FutureBase<T>::thenImplementation(F&& func, R) {
-  static_assert(
-      R::Arg::ArgsSize::value <= 1, "Then must take zero/one argument");
+FutureBase<T>::thenImplementation(
+    F&& func,
+    R,
+    futures::detail::InlineContinuation allowInline) {
+  static_assert(R::Arg::ArgsSize::value == 2, "Then must take two arguments");
   typedef typename R::ReturnsFuture::Inner B;
 
   Promise<B> p;
@@ -445,222 +455,36 @@ FutureBase<T>::thenImplementation(F&& func, R) {
 
   // grab the Future now before we lose our handle on the Promise
   auto sf = p.getSemiFuture();
-  auto* e = this->getExecutor();
-  sf.setExecutor(e);
+  auto e = getKeepAliveToken(this->getExecutor());
+  sf.setExecutor(std::move(e));
   auto f = Future<B>(sf.core_);
   sf.core_ = nullptr;
 
   this->setCallback_(
       [state = futures::detail::makeCoreCallbackState(
-           std::move(p), std::forward<F>(func))](Try<T>&& t) mutable {
+           std::move(p), std::forward<F>(func))](
+          Executor::KeepAlive<>&& ka, Try<T>&& t) mutable {
         if (!R::Arg::isTry() && t.hasException()) {
-          state.setException(std::move(t.exception()));
+          state.setException(std::move(ka), std::move(t.exception()));
         } else {
           // Ensure that if function returned a SemiFuture we correctly chain
           // potential deferral.
-          auto tf2 = detail_msvc_15_7_workaround::tryInvoke(R{}, state, t);
+          auto tf2 = detail_msvc_15_7_workaround::tryInvoke(
+              R{}, state, ka.copy(), std::move(t));
           if (tf2.hasException()) {
-            state.setException(std::move(tf2.exception()));
+            state.setException(std::move(ka), std::move(tf2.exception()));
           } else {
             auto statePromise = state.stealPromise();
-            auto tf3 = chainExecutor(
-                statePromise.core_->getExecutor(), *std::move(tf2));
+            auto tf3 = chainExecutor(std::move(ka), *std::move(tf2));
             std::exchange(statePromise.core_, nullptr)
                 ->setProxy(std::exchange(tf3.core_, nullptr));
           }
         }
-      });
+      },
+      allowInline);
 
   return f;
 }
-
-template <class T>
-template <typename E>
-SemiFuture<T>
-FutureBase<T>::withinImplementation(Duration dur, E e, Timekeeper* tk) && {
-  struct Context {
-    explicit Context(E ex) : exception(std::move(ex)) {}
-    E exception;
-    Future<Unit> thisFuture;
-    Promise<T> promise;
-    std::atomic<bool> token{false};
-  };
-
-  std::shared_ptr<Timekeeper> tks;
-  if (LIKELY(!tk)) {
-    tks = folly::detail::getTimekeeperSingleton();
-    tk = tks.get();
-  }
-
-  if (UNLIKELY(!tk)) {
-    return makeSemiFuture<T>(FutureNoTimekeeper());
-  }
-
-  auto ctx = std::make_shared<Context>(std::move(e));
-
-  auto f = [ctx](Try<T>&& t) {
-    if (!ctx->token.exchange(true, std::memory_order_relaxed)) {
-      ctx->promise.setTry(std::move(t));
-    }
-  };
-  using R = futures::detail::callableResult<T, decltype(f)>;
-  ctx->thisFuture = this->thenImplementation(std::move(f), R{});
-
-  // Properly propagate interrupt values through futures chained after within()
-  ctx->promise.setInterruptHandler(
-      [weakCtx = to_weak_ptr(ctx)](const exception_wrapper& ex) {
-        if (auto lockedCtx = weakCtx.lock()) {
-          lockedCtx->thisFuture.raise(ex);
-        }
-      });
-
-  // Have time keeper use a weak ptr to hold ctx,
-  // so that ctx can be deallocated as soon as the future job finished.
-  tk->after(dur).thenTry([weakCtx = to_weak_ptr(ctx)](Try<Unit>&& t) mutable {
-    auto lockedCtx = weakCtx.lock();
-    if (!lockedCtx) {
-      // ctx already released. "this" completed first, cancel "after"
-      return;
-    }
-    // "after" completed first, cancel "this"
-    lockedCtx->thisFuture.raise(FutureTimeout());
-    if (!lockedCtx->token.exchange(true, std::memory_order_relaxed)) {
-      if (t.hasException()) {
-        lockedCtx->promise.setException(std::move(t.exception()));
-      } else {
-        lockedCtx->promise.setException(std::move(lockedCtx->exception));
-      }
-    }
-  });
-
-  return ctx->promise.getSemiFuture();
-}
-
-/**
- * Defer work until executor is actively boosted.
- *
- * NOTE: that this executor is a private implementation detail belonging to the
- * Folly Futures library and not intended to be used elsewhere. It is designed
- * specifically for the use case of deferring work on a SemiFuture. It is NOT
- * thread safe. Please do not use for any other purpose without great care.
- */
-class DeferredExecutor final : public Executor {
- public:
-  void add(Func func) override {
-    auto state = state_.load(std::memory_order_acquire);
-    if (state == State::DETACHED) {
-      return;
-    }
-    if (state == State::HAS_EXECUTOR) {
-      executor_->add(std::move(func));
-      return;
-    }
-    DCHECK(state == State::EMPTY);
-    func_ = std::move(func);
-    if (state_.compare_exchange_strong(
-            state,
-            State::HAS_FUNCTION,
-            std::memory_order_release,
-            std::memory_order_acquire)) {
-      return;
-    }
-    DCHECK(state == State::DETACHED || state == State::HAS_EXECUTOR);
-    if (state == State::DETACHED) {
-      std::exchange(func_, nullptr);
-      return;
-    }
-    executor_->add(std::exchange(func_, nullptr));
-  }
-
-  Executor* getExecutor() const {
-    assert(executor_.get());
-    return executor_.get();
-  }
-
-  void setExecutor(folly::Executor::KeepAlive<> executor) {
-    if (nestedExecutors_) {
-      auto nestedExecutors = std::exchange(nestedExecutors_, nullptr);
-      for (auto& nestedExecutor : *nestedExecutors) {
-        nestedExecutor->setExecutor(executor.copy());
-      }
-    }
-    executor_ = std::move(executor);
-    auto state = state_.load(std::memory_order_acquire);
-    if (state == State::EMPTY &&
-        state_.compare_exchange_strong(
-            state,
-            State::HAS_EXECUTOR,
-            std::memory_order_release,
-            std::memory_order_acquire)) {
-      return;
-    }
-
-    DCHECK(state == State::HAS_FUNCTION);
-    state_.store(State::HAS_EXECUTOR, std::memory_order_release);
-    executor_->add(std::exchange(func_, nullptr));
-  }
-
-  void detach() {
-    if (nestedExecutors_) {
-      auto nestedExecutors = std::exchange(nestedExecutors_, nullptr);
-      for (auto& nestedExecutor : *nestedExecutors) {
-        nestedExecutor->detach();
-      }
-    }
-    auto state = state_.load(std::memory_order_acquire);
-    if (state == State::EMPTY &&
-        state_.compare_exchange_strong(
-            state,
-            State::DETACHED,
-            std::memory_order_release,
-            std::memory_order_acquire)) {
-      return;
-    }
-
-    DCHECK(state == State::HAS_FUNCTION);
-    state_.store(State::DETACHED, std::memory_order_release);
-    std::exchange(func_, nullptr);
-  }
-
-  void setNestedExecutors(
-      std::vector<folly::Executor::KeepAlive<DeferredExecutor>> executors) {
-    DCHECK(!nestedExecutors_);
-    nestedExecutors_ = std::make_unique<
-        std::vector<folly::Executor::KeepAlive<DeferredExecutor>>>(
-        std::move(executors));
-  }
-
-  static KeepAlive<DeferredExecutor> create() {
-    return makeKeepAlive<DeferredExecutor>(new DeferredExecutor());
-  }
-
- private:
-  DeferredExecutor() {}
-
-  bool keepAliveAcquire() override {
-    auto keepAliveCount =
-        keepAliveCount_.fetch_add(1, std::memory_order_relaxed);
-    DCHECK(keepAliveCount > 0);
-    return true;
-  }
-
-  void keepAliveRelease() override {
-    auto keepAliveCount =
-        keepAliveCount_.fetch_sub(1, std::memory_order_acq_rel);
-    DCHECK(keepAliveCount > 0);
-    if (keepAliveCount == 1) {
-      delete this;
-    }
-  }
-
-  enum class State { EMPTY, HAS_FUNCTION, HAS_EXECUTOR, DETACHED };
-  std::atomic<State> state_{State::EMPTY};
-  Func func_;
-  folly::Executor::KeepAlive<> executor_;
-  std::unique_ptr<std::vector<folly::Executor::KeepAlive<DeferredExecutor>>>
-      nestedExecutors_;
-  std::atomic<ssize_t> keepAliveCount_{1};
-};
 
 class WaitExecutor final : public folly::Executor {
  public:
@@ -678,11 +502,17 @@ class WaitExecutor final : public folly::Executor {
 
   void drive() {
     baton_.wait();
-    baton_.reset();
-    auto funcs = std::move(queue_.wlock()->funcs);
-    for (auto& func : funcs) {
-      std::exchange(func, nullptr)();
-    }
+#if FOLLY_FUTURE_USING_FIBER
+    fibers::runInMainContext([&]() {
+#endif
+      baton_.reset();
+      auto funcs = std::move(queue_.wlock()->funcs);
+      for (auto& func : funcs) {
+        std::exchange(func, nullptr)();
+      }
+#if FOLLY_FUTURE_USING_FIBER
+    });
+#endif
   }
 
   using Clock = std::chrono::steady_clock;
@@ -691,12 +521,18 @@ class WaitExecutor final : public folly::Executor {
     if (!baton_.try_wait_until(deadline)) {
       return false;
     }
-    baton_.reset();
-    auto funcs = std::move(queue_.wlock()->funcs);
-    for (auto& func : funcs) {
-      std::exchange(func, nullptr)();
-    }
-    return true;
+#if FOLLY_FUTURE_USING_FIBER
+    return fibers::runInMainContext([&]() {
+#endif
+      baton_.reset();
+      auto funcs = std::move(queue_.wlock()->funcs);
+      for (auto& func : funcs) {
+        std::exchange(func, nullptr)();
+      }
+      return true;
+#if FOLLY_FUTURE_USING_FIBER
+    });
+#endif
   }
 
   void detach() {
@@ -832,37 +668,17 @@ SemiFuture<T> SemiFuture<T>::makeEmpty() {
 }
 
 template <class T>
-typename SemiFuture<T>::DeferredExecutor* SemiFuture<T>::getDeferredExecutor()
-    const {
-  if (auto executor = this->getExecutor()) {
-    assert(dynamic_cast<DeferredExecutor*>(executor) != nullptr);
-    return static_cast<DeferredExecutor*>(executor);
-  }
-  return nullptr;
-}
-
-template <class T>
-folly::Executor::KeepAlive<typename SemiFuture<T>::DeferredExecutor>
-SemiFuture<T>::stealDeferredExecutor() const {
-  if (auto executor = this->getExecutor()) {
-    assert(dynamic_cast<DeferredExecutor*>(executor) != nullptr);
-    auto executorKeepAlive =
-        folly::getKeepAliveToken(static_cast<DeferredExecutor*>(executor));
-    this->core_->setExecutor(nullptr);
-    return executorKeepAlive;
-  }
-  return {};
+futures::detail::DeferredWrapper SemiFuture<T>::stealDeferredExecutor() {
+  return this->getCore().stealDeferredExecutor();
 }
 
 template <class T>
 void SemiFuture<T>::releaseDeferredExecutor(Core* core) {
-  if (!core) {
+  if (!core || core->hasCallback()) {
     return;
   }
-  if (auto executor = core->getExecutor()) {
-    assert(dynamic_cast<DeferredExecutor*>(executor) != nullptr);
-    static_cast<DeferredExecutor*>(executor)->detach();
-    core->setExecutor(nullptr);
+  if (auto executor = core->stealDeferredExecutor()) {
+    executor.get()->detach();
   }
 }
 
@@ -880,7 +696,7 @@ SemiFuture<T>::SemiFuture(Future<T>&& other) noexcept
     : futures::detail::FutureBase<T>(std::move(other)) {
   // SemiFuture should not have an executor on construction
   if (this->core_) {
-    this->setExecutor(nullptr);
+    this->setExecutor(futures::detail::KeepAliveOrDeferred{});
   }
 }
 
@@ -897,7 +713,7 @@ SemiFuture<T>& SemiFuture<T>::operator=(Future<T>&& other) noexcept {
   this->assign(std::move(other));
   // SemiFuture should not have an executor on construction
   if (this->core_) {
-    this->setExecutor(nullptr);
+    this->setExecutor(Executor::KeepAlive<>{});
   }
   return *this;
 }
@@ -908,7 +724,7 @@ Future<T> SemiFuture<T>::via(Executor::KeepAlive<> executor) && {
     throw_exception<FutureNoExecutor>();
   }
 
-  if (auto deferredExecutor = getDeferredExecutor()) {
+  if (auto deferredExecutor = this->getDeferredExecutor()) {
     deferredExecutor->setExecutor(executor.copy());
   }
 
@@ -936,18 +752,23 @@ template <class T>
 template <typename F>
 SemiFuture<typename futures::detail::tryCallableResult<T, F>::value_type>
 SemiFuture<T>::defer(F&& func) && {
-  DeferredExecutor* deferredExecutor = getDeferredExecutor();
-  if (!deferredExecutor) {
-    auto newDeferredExecutor = DeferredExecutor::create();
-    deferredExecutor = newDeferredExecutor.get();
-    this->setExecutor(std::move(newDeferredExecutor));
-  }
+  auto deferredExecutorPtr = this->getDeferredExecutor();
+  futures::detail::KeepAliveOrDeferred deferredExecutor = [&]() {
+    if (deferredExecutorPtr) {
+      return futures::detail::KeepAliveOrDeferred{deferredExecutorPtr->copy()};
+    } else {
+      auto newDeferredExecutor = futures::detail::KeepAliveOrDeferred(
+          futures::detail::DeferredExecutor::create());
+      this->setExecutor(newDeferredExecutor.copy());
+      return newDeferredExecutor;
+    }
+  }();
 
-  auto sf = Future<T>(this->core_).thenTry(std::forward<F>(func)).semi();
+  auto sf = Future<T>(this->core_).thenTryInline(std::forward<F>(func)).semi();
   this->core_ = nullptr;
   // Carry deferred executor through chain as constructor from Future will
   // nullify it
-  sf.setExecutor(deferredExecutor);
+  sf.setExecutor(std::move(deferredExecutor));
   return sf;
 }
 
@@ -956,16 +777,32 @@ template <typename F>
 SemiFuture<
     typename futures::detail::tryExecutorCallableResult<T, F>::value_type>
 SemiFuture<T>::deferExTry(F&& func) && {
-  DeferredExecutor* deferredExecutor = getDeferredExecutor();
-  if (!deferredExecutor) {
-    auto newDeferredExecutor = DeferredExecutor::create();
-    deferredExecutor = newDeferredExecutor.get();
-    this->setExecutor(std::move(newDeferredExecutor));
-  }
-  return std::move(*this).defer(
-      [deferredExecutor, f = std::forward<F>(func)](Try<T>&& t) mutable {
-        return f(deferredExecutor->getExecutor(), std::move(t));
-      });
+  auto deferredExecutorPtr = this->getDeferredExecutor();
+  futures::detail::DeferredWrapper deferredExecutor = [&]() mutable {
+    if (deferredExecutorPtr) {
+      return deferredExecutorPtr->copy();
+    } else {
+      auto newDeferredExecutor = futures::detail::DeferredExecutor::create();
+      this->setExecutor(
+          futures::detail::KeepAliveOrDeferred{newDeferredExecutor->copy()});
+      return newDeferredExecutor;
+    }
+  }();
+
+  auto sf = Future<T>(this->core_)
+                .thenExTryInline([func = std::forward<F>(func)](
+                                     folly::Executor::KeepAlive<>&& keepAlive,
+                                     folly::Try<T>&& val) mutable {
+                  return std::forward<F>(func)(
+                      std::move(keepAlive), std::forward<decltype(val)>(val));
+                })
+                .semi();
+  this->core_ = nullptr;
+  // Carry deferred executor through chain as constructor from Future will
+  // nullify it
+  sf.setExecutor(
+      futures::detail::KeepAliveOrDeferred{std::move(deferredExecutor)});
+  return sf;
 }
 
 template <class T>
@@ -1024,6 +861,11 @@ SemiFuture<T> SemiFuture<T>::deferError(F&& func) && {
       });
 }
 
+template <class T>
+SemiFuture<Unit> SemiFuture<T>::unit() && {
+  return std::move(*this).deferValue([](T&&) {});
+}
+
 template <typename T>
 SemiFuture<T> SemiFuture<T>::delayed(Duration dur, Timekeeper* tk) && {
   return collectAllSemiFuture(*this, futures::sleep(dur, tk))
@@ -1047,42 +889,6 @@ template <class T>
 Future<T>& Future<T>::operator=(Future<T>&& other) noexcept {
   this->assign(std::move(other));
   return *this;
-}
-
-template <class T>
-template <
-    class T2,
-    typename std::enable_if<
-        !std::is_same<T, typename std::decay<T2>::type>::value &&
-            std::is_constructible<T, T2&&>::value &&
-            std::is_convertible<T2&&, T>::value,
-        int>::type>
-Future<T>::Future(Future<T2>&& other)
-    : Future(
-          std::move(other).thenValue([](T2&& v) { return T(std::move(v)); })) {}
-
-template <class T>
-template <
-    class T2,
-    typename std::enable_if<
-        !std::is_same<T, typename std::decay<T2>::type>::value &&
-            std::is_constructible<T, T2&&>::value &&
-            !std::is_convertible<T2&&, T>::value,
-        int>::type>
-Future<T>::Future(Future<T2>&& other)
-    : Future(
-          std::move(other).thenValue([](T2&& v) { return T(std::move(v)); })) {}
-
-template <class T>
-template <
-    class T2,
-    typename std::enable_if<
-        !std::is_same<T, typename std::decay<T2>::type>::value &&
-            std::is_constructible<T, T2&&>::value,
-        int>::type>
-Future<T>& Future<T>::operator=(Future<T2>&& other) {
-  return operator=(
-      std::move(other).thenValue([](T2&& v) { return T(std::move(v)); }));
 }
 
 // unwrap
@@ -1118,11 +924,12 @@ Future<T> Future<T>::via(Executor::KeepAlive<> executor) & {
   this->throwIfInvalid();
   Promise<T> p;
   auto sf = p.getSemiFuture();
-  auto func = [p = std::move(p)](Try<T>&& t) mutable {
+  auto func = [p = std::move(p)](Executor::KeepAlive<>&&, Try<T>&& t) mutable {
     p.setTry(std::move(t));
   };
-  using R = futures::detail::callableResult<T, decltype(func)>;
-  this->thenImplementation(std::move(func), R{});
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(func)>;
+  this->thenImplementation(
+      std::move(func), R{}, futures::detail::InlineContinuation::forbid);
   // Construct future from semifuture manually because this may not have
   // an executor set due to legacy code. This means we can bypass the executor
   // check in SemiFuture::via
@@ -1153,62 +960,124 @@ template <class T>
 template <typename F>
 Future<typename futures::detail::tryCallableResult<T, F>::value_type>
 Future<T>::thenTry(F&& func) && {
-  auto lambdaFunc = [f = std::forward<F>(func)](folly::Try<T>&& t) mutable {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        folly::Executor::KeepAlive<>&&,
+                        folly::Try<T>&& t) mutable {
     return std::forward<F>(f)(std::move(t));
   };
-  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
-  return this->thenImplementation(std::move(lambdaFunc), R{});
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::forbid);
+}
+
+template <class T>
+template <typename F>
+Future<typename futures::detail::tryCallableResult<T, F>::value_type>
+Future<T>::thenTryInline(F&& func) && {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        folly::Executor::KeepAlive<>&&,
+                        folly::Try<T>&& t) mutable {
+    return std::forward<F>(f)(std::move(t));
+  };
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::permit);
 }
 
 template <class T>
 template <typename F>
 Future<typename futures::detail::tryExecutorCallableResult<T, F>::value_type>
 Future<T>::thenExTry(F&& func) && {
-  // As Futures may carry null executors, ensure that what we pass into the
-  // continuation is always usable by replacing with inline if necessary.
-  auto ka = getKeepAliveToken(this->getExecutor());
-  // Enforce that executor cannot be null
-  DCHECK(ka);
-
-  auto lambdaFunc = [f = std::forward<F>(func),
-                     exec = std::move(ka)](folly::Try<T>&& t) mutable {
-    return std::forward<F>(f)(exec, std::move(t));
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&& ka, folly::Try<T>&& t) mutable {
+    // Enforce that executor cannot be null
+    DCHECK(ka);
+    return std::forward<F>(f)(std::move(ka), std::move(t));
   };
-  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
-  return this->thenImplementation(std::move(lambdaFunc), R{});
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::forbid);
+}
+
+template <class T>
+template <typename F>
+Future<typename futures::detail::tryExecutorCallableResult<T, F>::value_type>
+Future<T>::thenExTryInline(F&& func) && {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&& ka, folly::Try<T>&& t) mutable {
+    // Enforce that executor cannot be null
+    DCHECK(ka);
+    return std::forward<F>(f)(std::move(ka), std::move(t));
+  };
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::permit);
 }
 
 template <class T>
 template <typename F>
 Future<typename futures::detail::valueCallableResult<T, F>::value_type>
 Future<T>::thenValue(F&& func) && {
-  auto lambdaFunc = [f = std::forward<F>(func)](folly::Try<T>&& t) mutable {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&&, folly::Try<T>&& t) mutable {
     return futures::detail::wrapInvoke(std::move(t), std::forward<F>(f));
   };
-  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
-  return this->thenImplementation(std::move(lambdaFunc), R{});
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::forbid);
+}
+
+template <class T>
+template <typename F>
+Future<typename futures::detail::valueCallableResult<T, F>::value_type>
+Future<T>::thenValueInline(F&& func) && {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&&, folly::Try<T>&& t) mutable {
+    return futures::detail::wrapInvoke(std::move(t), std::forward<F>(f));
+  };
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::permit);
 }
 
 template <class T>
 template <typename F>
 Future<typename futures::detail::valueExecutorCallableResult<T, F>::value_type>
 Future<T>::thenExValue(F&& func) && {
-  // As Futures may carry null executors, ensure that what we pass into the
-  // continuation is always usable by replacing with inline if necessary.
-  auto ka = getKeepAliveToken(this->getExecutor());
-  // Enforce that executor cannot be null
-  DCHECK(ka);
-  auto lambdaFunc = [f = std::forward<F>(func),
-                     exec = std::move(ka)](folly::Try<T>&& t) mutable {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&& ka, folly::Try<T>&& t) mutable {
+    // Enforce that executor cannot be null
+    DCHECK(ka);
     return std::forward<F>(f)(
-        exec,
+        std::move(ka),
         t.template get<
             false,
             typename futures::detail::valueExecutorCallableResult<T, F>::
                 ValueArg>());
   };
-  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
-  return this->thenImplementation(std::move(lambdaFunc), R{});
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::forbid);
+}
+
+template <class T>
+template <typename F>
+Future<typename futures::detail::valueExecutorCallableResult<T, F>::value_type>
+Future<T>::thenExValueInline(F&& func) && {
+  auto lambdaFunc = [f = std::forward<F>(func)](
+                        Executor::KeepAlive<>&& ka, folly::Try<T>&& t) mutable {
+    // Enforce that executor cannot be null
+    DCHECK(ka);
+    return std::forward<F>(f)(
+        std::move(ka),
+        t.template get<
+            false,
+            typename futures::detail::valueExecutorCallableResult<T, F>::
+                ValueArg>());
+  };
+  using R = futures::detail::tryExecutorCallableResult<T, decltype(lambdaFunc)>;
+  return this->thenImplementation(
+      std::move(lambdaFunc), R{}, futures::detail::InlineContinuation::permit);
 }
 
 template <class T>
@@ -1224,19 +1093,22 @@ Future<T>::thenError(tag_t<ExceptionType>, F&& func) && {
 
   this->setCallback_(
       [state = futures::detail::makeCoreCallbackState(
-           std::move(p), std::forward<F>(func))](Try<T>&& t) mutable {
+           std::move(p), std::forward<F>(func))](
+          Executor::KeepAlive<>&& ka, Try<T>&& t) mutable {
         if (auto ex = t.template tryGetExceptionObject<
                       std::remove_reference_t<ExceptionType>>()) {
           auto tf2 = state.tryInvoke(std::move(*ex));
           if (tf2.hasException()) {
-            state.setException(std::move(tf2.exception()));
+            state.setException(std::move(ka), std::move(tf2.exception()));
           } else {
-            tf2->setCallback_([p = state.stealPromise()](Try<T>&& t3) mutable {
-              p.setTry(std::move(t3));
-            });
+            tf2->setCallback_(
+                [p = state.stealPromise()](
+                    Executor::KeepAlive<>&& innerKA, Try<T>&& t3) mutable {
+                  p.setTry(std::move(innerKA), std::move(t3));
+                });
           }
         } else {
-          state.setTry(std::move(t));
+          state.setTry(std::move(ka), std::move(t));
         }
       });
 
@@ -1257,12 +1129,14 @@ Future<T>::thenError(tag_t<ExceptionType>, F&& func) && {
 
   this->setCallback_([state = futures::detail::makeCoreCallbackState(
                           std::move(p), std::forward<F>(func))](
-                         Try<T>&& t) mutable {
+                         Executor::KeepAlive<>&& ka, Try<T>&& t) mutable {
     if (auto ex = t.template tryGetExceptionObject<
                   std::remove_reference_t<ExceptionType>>()) {
-      state.setTry(makeTryWith([&] { return state.invoke(std::move(*ex)); }));
+      state.setTry(std::move(ka), makeTryWith([&] {
+                     return state.invoke(std::move(*ex));
+                   }));
     } else {
-      state.setTry(std::move(t));
+      state.setTry(std::move(ka), std::move(t));
     }
   });
 
@@ -1280,22 +1154,24 @@ Future<T>::thenError(F&& func) && {
 
   Promise<T> p;
   auto sf = p.getSemiFuture();
-  this->setCallback_(
-      [state = futures::detail::makeCoreCallbackState(
-           std::move(p), std::forward<F>(func))](Try<T> t) mutable {
-        if (t.hasException()) {
-          auto tf2 = state.tryInvoke(std::move(t.exception()));
-          if (tf2.hasException()) {
-            state.setException(std::move(tf2.exception()));
-          } else {
-            tf2->setCallback_([p = state.stealPromise()](Try<T>&& t3) mutable {
-              p.setTry(std::move(t3));
+  this->setCallback_([state = futures::detail::makeCoreCallbackState(
+                          std::move(p), std::forward<F>(func))](
+                         Executor::KeepAlive<>&& ka, Try<T> t) mutable {
+    if (t.hasException()) {
+      auto tf2 = state.tryInvoke(std::move(t.exception()));
+      if (tf2.hasException()) {
+        state.setException(std::move(ka), std::move(tf2.exception()));
+      } else {
+        tf2->setCallback_(
+            [p = state.stealPromise()](
+                Executor::KeepAlive<>&& innerKA, Try<T>&& t3) mutable {
+              p.setTry(std::move(innerKA), std::move(t3));
             });
-          }
-        } else {
-          state.setTry(std::move(t));
-        }
-      });
+      }
+    } else {
+      state.setTry(std::move(ka), std::move(t));
+    }
+  });
 
   return std::move(sf).via(std::move(e));
 }
@@ -1311,16 +1187,17 @@ Future<T>::thenError(F&& func) && {
 
   Promise<T> p;
   auto sf = p.getSemiFuture();
-  this->setCallback_(
-      [state = futures::detail::makeCoreCallbackState(
-           std::move(p), std::forward<F>(func))](Try<T>&& t) mutable {
-        if (t.hasException()) {
-          state.setTry(makeTryWith(
-              [&] { return state.invoke(std::move(t.exception())); }));
-        } else {
-          state.setTry(std::move(t));
-        }
-      });
+  this->setCallback_([state = futures::detail::makeCoreCallbackState(
+                          std::move(p), std::forward<F>(func))](
+                         Executor::KeepAlive<>&& ka, Try<T>&& t) mutable {
+    if (t.hasException()) {
+      state.setTry(std::move(ka), makeTryWith([&] {
+                     return state.invoke(std::move(t.exception()));
+                   }));
+    } else {
+      state.setTry(std::move(ka), std::move(t));
+    }
+  });
 
   return std::move(sf).via(std::move(e));
 }
@@ -1433,38 +1310,34 @@ namespace futures {
 namespace detail {
 
 template <typename V, typename... Fs, std::size_t... Is>
-FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN void
-foreach_(std::index_sequence<Is...>, V&& v, Fs&&... fs) {
+FOLLY_ERASE void foreach_(std::index_sequence<Is...>, V&& v, Fs&&... fs) {
   using _ = int[];
   void(_{0, (void(v(index_constant<Is>{}, static_cast<Fs&&>(fs))), 0)...});
 }
 template <typename V, typename... Fs>
-FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN void foreach(
-    V&& v,
-    Fs&&... fs) {
+FOLLY_ERASE void foreach(V&& v, Fs&&... fs) {
   using _ = std::index_sequence_for<Fs...>;
   foreach_(_{}, static_cast<V&&>(v), static_cast<Fs&&>(fs)...);
 }
 
 template <typename T>
-DeferredExecutor* getDeferredExecutor(SemiFuture<T>& future) {
+futures::detail::DeferredExecutor* getDeferredExecutor(SemiFuture<T>& future) {
   return future.getDeferredExecutor();
 }
 
 template <typename T>
-folly::Executor::KeepAlive<DeferredExecutor> stealDeferredExecutor(
-    SemiFuture<T>& future) {
+futures::detail::DeferredWrapper stealDeferredExecutor(SemiFuture<T>& future) {
   return future.stealDeferredExecutor();
 }
 
 template <typename T>
-folly::Executor::KeepAlive<DeferredExecutor> stealDeferredExecutor(Future<T>&) {
+futures::detail::DeferredWrapper stealDeferredExecutor(Future<T>&) {
   return {};
 }
 
 template <typename... Ts>
 void stealDeferredExecutorsVariadic(
-    std::vector<folly::Executor::KeepAlive<DeferredExecutor>>& executors,
+    std::vector<futures::detail::DeferredWrapper>& executors,
     Ts&... ts) {
   auto foreach = [&](auto& future) {
     if (auto executor = stealDeferredExecutor(future)) {
@@ -1477,7 +1350,7 @@ void stealDeferredExecutorsVariadic(
 
 template <class InputIterator>
 void stealDeferredExecutors(
-    std::vector<folly::Executor::KeepAlive<DeferredExecutor>>& executors,
+    std::vector<futures::detail::DeferredWrapper>& executors,
     InputIterator first,
     InputIterator last) {
   for (auto it = first; it != last; ++it) {
@@ -1503,14 +1376,13 @@ collectAllSemiFuture(Fs&&... fs) {
     Result results;
   };
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutorsVariadic(executors, fs...);
 
   auto ctx = std::make_shared<Context>();
   futures::detail::foreach(
       [&](auto i, auto&& f) {
-        f.setCallback_([i, ctx](auto&& t) {
+        f.setCallback_([i, ctx](auto&&, auto&& t) {
           std::get<i.value>(ctx->results) = std::move(t);
         });
       },
@@ -1544,23 +1416,31 @@ collectAllSemiFuture(InputIterator first, InputIterator last) {
   using T = typename F::value_type;
 
   struct Context {
-    explicit Context(size_t n) : results(n) {}
+    explicit Context(size_t n) : results(n), count(n) {}
     ~Context() {
-      p.setValue(std::move(results));
+      futures::detail::setTry(
+          p, std::move(ka), Try<std::vector<Try<T>>>(std::move(results)));
     }
     Promise<std::vector<Try<T>>> p;
+    Executor::KeepAlive<> ka;
     std::vector<Try<T>> results;
+    std::atomic<size_t> count;
   };
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutors(executors, first, last);
 
   auto ctx = std::make_shared<Context>(size_t(std::distance(first, last)));
 
   for (size_t i = 0; first != last; ++first, ++i) {
     first->setCallback_(
-        [i, ctx](Try<T>&& t) { ctx->results[i] = std::move(t); });
+        [i, ctx](Executor::KeepAlive<>&& ka, Try<T>&& t) {
+          ctx->results[i] = std::move(t);
+          if (ctx->count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            ctx->ka = std::move(ka);
+          }
+        },
+        futures::detail::InlineContinuation::permit);
   }
 
   auto future = ctx->p.getSemiFuture();
@@ -1613,13 +1493,12 @@ collectSemiFuture(InputIterator first, InputIterator last) {
     std::atomic<bool> threw{false};
   };
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutors(executors, first, last);
 
   auto ctx = std::make_shared<Context>(std::distance(first, last));
   for (size_t i = 0; first != last; ++first, ++i) {
-    first->setCallback_([i, ctx](Try<T>&& t) {
+    first->setCallback_([i, ctx](Executor::KeepAlive<>&&, Try<T>&& t) {
       if (t.hasException()) {
         if (!ctx->threw.exchange(true, std::memory_order_relaxed)) {
           ctx->p.setException(std::move(t.exception()));
@@ -1636,7 +1515,7 @@ collectSemiFuture(InputIterator first, InputIterator last) {
       return std::move(t).value();
     };
     future = std::move(future).defer(work);
-    auto deferredExecutor = futures::detail::getDeferredExecutor(future);
+    const auto& deferredExecutor = futures::detail::getDeferredExecutor(future);
     deferredExecutor->setNestedExecutors(std::move(executors));
   }
   return future;
@@ -1667,14 +1546,13 @@ collectSemiFuture(Fs&&... fs) {
     std::atomic<bool> threw{false};
   };
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutorsVariadic(executors, fs...);
 
   auto ctx = std::make_shared<Context>();
   futures::detail::foreach(
       [&](auto i, auto&& f) {
-        f.setCallback_([i, ctx](auto&& t) {
+        f.setCallback_([i, ctx](Executor::KeepAlive<>&&, auto&& t) {
           if (t.hasException()) {
             if (!ctx->threw.exchange(true, std::memory_order_relaxed)) {
               ctx->p.setException(std::move(t.exception()));
@@ -1692,7 +1570,7 @@ collectSemiFuture(Fs&&... fs) {
       return std::move(t).value();
     };
     future = std::move(future).defer(work);
-    auto deferredExecutor = futures::detail::getDeferredExecutor(future);
+    const auto& deferredExecutor = futures::detail::getDeferredExecutor(future);
     deferredExecutor->setNestedExecutors(std::move(executors));
   }
   return future;
@@ -1718,6 +1596,14 @@ Future<std::pair<
     size_t,
     Try<typename std::iterator_traits<InputIterator>::value_type::value_type>>>
 collectAny(InputIterator first, InputIterator last) {
+  return collectAnySemiFuture(first, last).via(&InlineExecutor::instance());
+}
+
+template <class InputIterator>
+SemiFuture<std::pair<
+    size_t,
+    Try<typename std::iterator_traits<InputIterator>::value_type::value_type>>>
+collectAnySemiFuture(InputIterator first, InputIterator last) {
   using F = typename std::iterator_traits<InputIterator>::value_type;
   using T = typename F::value_type;
 
@@ -1726,15 +1612,27 @@ collectAny(InputIterator first, InputIterator last) {
     std::atomic<bool> done{false};
   };
 
+  std::vector<futures::detail::DeferredWrapper> executors;
+  futures::detail::stealDeferredExecutors(executors, first, last);
+
   auto ctx = std::make_shared<Context>();
   for (size_t i = 0; first != last; ++first, ++i) {
-    first->setCallback_([i, ctx](Try<T>&& t) {
+    first->setCallback_([i, ctx](Executor::KeepAlive<>&&, Try<T>&& t) {
       if (!ctx->done.exchange(true, std::memory_order_relaxed)) {
         ctx->p.setValue(std::make_pair(i, std::move(t)));
       }
     });
   }
-  return ctx->p.getSemiFuture().via(&InlineExecutor::instance());
+  auto future = ctx->p.getSemiFuture();
+  if (!executors.empty()) {
+    future = std::move(future).defer(
+        [](Try<typename decltype(future)::value_type>&& t) {
+          return std::move(t).value();
+        });
+    const auto& deferredExecutor = futures::detail::getDeferredExecutor(future);
+    deferredExecutor->setNestedExecutors(std::move(executors));
+  }
+  return future;
 }
 
 // collectAnyWithoutException (iterator)
@@ -1755,13 +1653,12 @@ collectAnyWithoutException(InputIterator first, InputIterator last) {
     size_t nTotal;
   };
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutors(executors, first, last);
 
   auto ctx = std::make_shared<Context>(size_t(std::distance(first, last)));
   for (size_t i = 0; first != last; ++first, ++i) {
-    first->setCallback_([i, ctx](Try<T>&& t) {
+    first->setCallback_([i, ctx](Executor::KeepAlive<>&&, Try<T>&& t) {
       if (!t.hasException() &&
           !ctx->done.exchange(true, std::memory_order_relaxed)) {
         ctx->p.setValue(std::make_pair(i, std::move(t.value())));
@@ -1779,7 +1676,7 @@ collectAnyWithoutException(InputIterator first, InputIterator last) {
         [](Try<typename decltype(future)::value_type>&& t) {
           return std::move(t).value();
         });
-    auto deferredExecutor = futures::detail::getDeferredExecutor(future);
+    const auto& deferredExecutor = futures::detail::getDeferredExecutor(future);
     deferredExecutor->setNestedExecutors(std::move(executors));
   }
   return future;
@@ -1815,8 +1712,7 @@ collectN(InputIterator first, InputIterator last, size_t n) {
         exception_wrapper(std::runtime_error("Not enough futures")));
   }
 
-  std::vector<folly::Executor::KeepAlive<futures::detail::DeferredExecutor>>
-      executors;
+  std::vector<futures::detail::DeferredWrapper> executors;
   futures::detail::stealDeferredExecutors(executors, first, last);
 
   // for each completed Future, increase count and add to vector, until we
@@ -1824,7 +1720,7 @@ collectN(InputIterator first, InputIterator last, size_t n) {
   // vector
   auto ctx = std::make_shared<Context>(size_t(std::distance(first, last)), n);
   for (size_t i = 0; first != last; ++first, ++i) {
-    first->setCallback_([i, ctx](Try<T>&& t) {
+    first->setCallback_([i, ctx](Executor::KeepAlive<>&&, Try<T>&& t) {
       // relaxed because this guards control but does not guard data
       auto const c = 1 + ctx->completed.fetch_add(1, std::memory_order_relaxed);
       if (c > ctx->min) {
@@ -1856,7 +1752,7 @@ collectN(InputIterator first, InputIterator last, size_t n) {
         [](Try<typename decltype(future)::value_type>&& t) {
           return std::move(t).value();
         });
-    auto deferredExecutor = futures::detail::getDeferredExecutor(future);
+    const auto& deferredExecutor = futures::detail::getDeferredExecutor(future);
     deferredExecutor->setNestedExecutors(std::move(executors));
   }
   return future;
@@ -1938,7 +1834,8 @@ window(Executor::KeepAlive<> executor, Collection input, F func, size_t n) {
                        [&] { return ctx->func(std::move(ctx->input[i])); })
                        .via(ctx->executor.get());
 
-        fut.setCallback_([ctx = std::move(ctx), i](Try<Result>&& t) mutable {
+        fut.setCallback_([ctx = std::move(ctx), i](
+                             Executor::KeepAlive<>&&, Try<Result>&& t) mutable {
           ctx->promises[i].setTry(std::move(t));
           // Chain another future onto this one
           spawn(std::move(ctx));
@@ -2020,14 +1917,16 @@ Future<T> unorderedReduce(It first, It last, T initial, F func) {
     }
     void operator()(Promise<T>&& p, Future<T>&& f) const {
       f.setCallback_(
-          [p = std::move(p)](Try<T>&& t) mutable { p.setTry(std::move(t)); });
+          [p = std::move(p)](Executor::KeepAlive<>&&, Try<T>&& t) mutable {
+            p.setTry(std::move(t));
+          });
     }
   };
 
   auto ctx = std::make_shared<Context>(
       std::move(initial), std::move(func), std::distance(first, last));
   for (size_t i = 0; first != last; ++first, ++i) {
-    first->setCallback_([i, ctx](Try<ItT>&& t) {
+    first->setCallback_([i, ctx](Executor::KeepAlive<>&&, Try<ItT>&& t) {
       (void)i;
       // Futures can be completed in any order, simultaneously.
       // To make this non-blocking, we create a new Future chain in
@@ -2041,28 +1940,29 @@ Future<T> unorderedReduce(It first, It last, T initial, F func) {
         f = std::exchange(ctx->memo_, std::move(f));
         if (++ctx->numThens_ == ctx->numFutures_) {
           // After reducing the value of the last Future, fulfill the Promise
-          ctx->memo_.setCallback_(
-              [ctx](Try<T>&& t2) { ctx->promise_.setValue(std::move(t2)); });
+          ctx->memo_.setCallback_([ctx](Executor::KeepAlive<>&&, Try<T>&& t2) {
+            ctx->promise_.setValue(std::move(t2));
+          });
         }
       }
-      f.setCallback_(
-          [ctx, mp = std::move(p), mt = std::move(t)](Try<T>&& v) mutable {
-            if (v.hasValue()) {
-              try {
-                Fulfill{}(
-                    std::move(mp),
-                    ctx->func_(
-                        std::move(v.value()),
-                        mt.template get<IsTry::value, Arg&&>()));
-              } catch (std::exception& e) {
-                mp.setException(exception_wrapper(std::current_exception(), e));
-              } catch (...) {
-                mp.setException(exception_wrapper(std::current_exception()));
-              }
-            } else {
-              mp.setTry(std::move(v));
-            }
-          });
+      f.setCallback_([ctx, mp = std::move(p), mt = std::move(t)](
+                         Executor::KeepAlive<>&&, Try<T>&& v) mutable {
+        if (v.hasValue()) {
+          try {
+            Fulfill{}(
+                std::move(mp),
+                ctx->func_(
+                    std::move(v.value()),
+                    mt.template get<IsTry::value, Arg&&>()));
+          } catch (std::exception& e) {
+            mp.setException(exception_wrapper(std::current_exception(), e));
+          } catch (...) {
+            mp.setException(exception_wrapper(std::current_exception()));
+          }
+        } else {
+          mp.setTry(std::move(v));
+        }
+      });
     });
   }
   return ctx->promise_.getSemiFuture().via(&InlineExecutor::instance());
@@ -2082,10 +1982,94 @@ Future<T> Future<T>::within(Duration dur, E e, Timekeeper* tk) && {
     return std::move(*this);
   }
 
-  auto* exe = this->getExecutor();
-  return std::move(*this)
-      .withinImplementation(dur, e, tk)
-      .via(exe ? exe : &InlineExecutor::instance());
+  auto* ePtr = this->getExecutor();
+  auto exe =
+      folly::getKeepAliveToken(ePtr ? *ePtr : InlineExecutor::instance());
+  return std::move(*this).semi().within(dur, e, tk).via(std::move(exe));
+}
+
+template <class T>
+template <typename E>
+SemiFuture<T> SemiFuture<T>::within(Duration dur, E e, Timekeeper* tk) && {
+  if (this->isReady()) {
+    return std::move(*this);
+  }
+
+  struct Context {
+    explicit Context(E ex) : exception(std::move(ex)) {}
+    E exception;
+    SemiFuture<Unit> thisFuture;
+    SemiFuture<Unit> afterFuture;
+    Promise<T> promise;
+    std::atomic<bool> token{false};
+  };
+
+  std::shared_ptr<Timekeeper> tks;
+  if (LIKELY(!tk)) {
+    tks = folly::detail::getTimekeeperSingleton();
+    tk = tks.get();
+  }
+
+  if (UNLIKELY(!tk)) {
+    return makeSemiFuture<T>(FutureNoTimekeeper());
+  }
+
+  auto ctx = std::make_shared<Context>(std::move(e));
+
+  ctx->thisFuture = std::move(*this).defer([ctx](Try<T>&& t) {
+    if (!ctx->token.exchange(true, std::memory_order_relaxed)) {
+      ctx->promise.setTry(std::move(t));
+      ctx->afterFuture.cancel();
+    }
+  });
+
+  // Have time keeper use a weak ptr to hold ctx,
+  // so that ctx can be deallocated as soon as the future job finished.
+  ctx->afterFuture =
+      tk->after(dur).defer([weakCtx = to_weak_ptr(ctx)](Try<Unit>&& t) mutable {
+        if (t.hasException() &&
+            t.exception().is_compatible_with<FutureCancellation>()) {
+          // This got cancelled by thisFuture so we can just return.
+          return;
+        }
+
+        auto lockedCtx = weakCtx.lock();
+        if (!lockedCtx) {
+          // ctx already released. "this" completed first, cancel "after"
+          return;
+        }
+        // "after" completed first, cancel "this"
+        lockedCtx->thisFuture.raise(FutureTimeout());
+        if (!lockedCtx->token.exchange(true, std::memory_order_relaxed)) {
+          if (t.hasException()) {
+            lockedCtx->promise.setException(std::move(t.exception()));
+          } else {
+            lockedCtx->promise.setException(std::move(lockedCtx->exception));
+          }
+        }
+      });
+
+  // Properly propagate interrupt values through futures chained after within()
+  ctx->promise.setInterruptHandler(
+      [weakCtx = to_weak_ptr(ctx)](const exception_wrapper& ex) {
+        if (auto lockedCtx = weakCtx.lock()) {
+          lockedCtx->thisFuture.raise(ex);
+        }
+      });
+
+  // Construct the future to return, create a fresh DeferredExecutor and
+  // nest the other two inside it, in case they already carry nested executors.
+  auto fut = ctx->promise.getSemiFuture();
+  auto newDeferredExecutor = futures::detail::KeepAliveOrDeferred(
+      futures::detail::DeferredExecutor::create());
+  fut.setExecutor(std::move(newDeferredExecutor));
+
+  std::vector<folly::futures::detail::DeferredWrapper> nestedExecutors;
+  nestedExecutors.emplace_back(ctx->thisFuture.stealDeferredExecutor());
+  nestedExecutors.emplace_back(ctx->afterFuture.stealDeferredExecutor());
+  futures::detail::getDeferredExecutor(fut)->setNestedExecutors(
+      std::move(nestedExecutors));
+  return fut;
 }
 
 // delayed
@@ -2114,27 +2098,30 @@ void waitImpl(FutureType& f) {
   }
 
   Promise<T> promise;
-  auto ret = promise.getSemiFuture();
-  auto baton = std::make_shared<FutureBatonType>();
-  f.setCallback_([baton, promise = std::move(promise)](Try<T>&& t) mutable {
+  auto ret = convertFuture(promise.getSemiFuture(), f);
+  FutureBatonType baton;
+  f.setCallback_([&baton, promise = std::move(promise)](
+                     Executor::KeepAlive<>&&, Try<T>&& t) mutable {
     promise.setTry(std::move(t));
-    baton->post();
+    baton.post();
   });
-  convertFuture(std::move(ret), f);
-  baton->wait();
+  f = std::move(ret);
+  baton.wait();
   assert(f.isReady());
 }
 
 template <class T>
-void convertFuture(SemiFuture<T>&& sf, Future<T>& f) {
+Future<T> convertFuture(SemiFuture<T>&& sf, const Future<T>& f) {
   // Carry executor from f, inserting an inline executor if it did not have one
   auto* exe = f.getExecutor();
-  f = std::move(sf).via(exe ? exe : &InlineExecutor::instance());
+  auto newFut = std::move(sf).via(exe ? exe : &InlineExecutor::instance());
+  newFut.core_->setInterruptHandlerNoLock(f.core_->getInterruptHandler());
+  return newFut;
 }
 
 template <class T>
-void convertFuture(SemiFuture<T>&& sf, SemiFuture<T>& f) {
-  f = std::move(sf);
+SemiFuture<T> convertFuture(SemiFuture<T>&& sf, const SemiFuture<T>&) {
+  return std::move(sf);
 }
 
 template <class FutureType, typename T = typename FutureType::value_type>
@@ -2148,13 +2135,14 @@ void waitImpl(FutureType& f, Duration dur) {
   }
 
   Promise<T> promise;
-  auto ret = promise.getSemiFuture();
+  auto ret = convertFuture(promise.getSemiFuture(), f);
   auto baton = std::make_shared<FutureBatonType>();
-  f.setCallback_([baton, promise = std::move(promise)](Try<T>&& t) mutable {
+  f.setCallback_([baton, promise = std::move(promise)](
+                     Executor::KeepAlive<>&&, Try<T>&& t) mutable {
     promise.setTry(std::move(t));
     baton->post();
   });
-  convertFuture(std::move(ret), f);
+  f = std::move(ret);
   if (baton->try_wait_for(dur)) {
     assert(f.isReady());
   }
@@ -2168,7 +2156,7 @@ void waitViaImpl(Future<T>& f, DrivableExecutor* e) {
   if (f.isReady()) {
     return;
   }
-  f = std::move(f).via(e).thenValue([](T&& t) { return std::move(t); });
+  f = std::move(f).via(e).thenTry([](Try<T>&& t) { return std::move(t); });
   while (!f.isReady()) {
     e->drive();
   }
@@ -2207,13 +2195,15 @@ void waitViaImpl(
 
 template <class T>
 SemiFuture<T>& SemiFuture<T>::wait() & {
-  if (auto deferredExecutor = getDeferredExecutor()) {
+  if (auto deferredExecutor = this->getDeferredExecutor()) {
     // Make sure that the last callback in the future chain will be run on the
     // WaitExecutor.
     Promise<T> promise;
     auto ret = promise.getSemiFuture();
     setCallback_(
-        [p = std::move(promise)](auto&& r) mutable { p.setTry(std::move(r)); });
+        [p = std::move(promise)](Executor::KeepAlive<>&&, auto&& r) mutable {
+          p.setTry(std::move(r));
+        });
     auto waitExecutor = futures::detail::WaitExecutor::create();
     deferredExecutor->setExecutor(waitExecutor.copy());
     while (!ret.isReady()) {
@@ -2235,13 +2225,15 @@ SemiFuture<T>&& SemiFuture<T>::wait() && {
 
 template <class T>
 SemiFuture<T>& SemiFuture<T>::wait(Duration dur) & {
-  if (auto deferredExecutor = getDeferredExecutor()) {
+  if (auto deferredExecutor = this->getDeferredExecutor()) {
     // Make sure that the last callback in the future chain will be run on the
     // WaitExecutor.
     Promise<T> promise;
     auto ret = promise.getSemiFuture();
     setCallback_(
-        [p = std::move(promise)](auto&& r) mutable { p.setTry(std::move(r)); });
+        [p = std::move(promise)](Executor::KeepAlive<>&&, auto&& r) mutable {
+          p.setTry(std::move(r));
+        });
     auto waitExecutor = futures::detail::WaitExecutor::create();
     auto deadline = futures::detail::WaitExecutor::Clock::now() + dur;
     deferredExecutor->setExecutor(waitExecutor.copy());
@@ -2430,12 +2422,30 @@ Future<T> Future<T>::filter(F&& predicate) && {
 }
 
 template <class F>
-Future<Unit> when(bool p, F&& thunk) {
+auto when(bool p, F&& thunk)
+    -> decltype(std::declval<invoke_result_t<F>>().unit()) {
   return p ? std::forward<F>(thunk)().unit() : makeFuture();
 }
 
 template <class P, class F>
-Future<Unit> whileDo(P&& predicate, F&& thunk) {
+typename std::
+    enable_if<isSemiFuture<invoke_result_t<F>>::value, SemiFuture<Unit>>::type
+    whileDo(P&& predicate, F&& thunk) {
+  if (predicate()) {
+    auto future = thunk();
+    return std::move(future).deferExValue(
+        [predicate = std::forward<P>(predicate),
+         thunk = std::forward<F>(thunk)](auto&& ex, auto&&) mutable {
+          return whileDo(std::forward<P>(predicate), std::forward<F>(thunk))
+              .via(std::move(ex));
+        });
+  }
+  return makeSemiFuture();
+}
+
+template <class P, class F>
+typename std::enable_if<isFuture<invoke_result_t<F>>::value, Future<Unit>>::type
+whileDo(P&& predicate, F&& thunk) {
   if (predicate()) {
     auto future = thunk();
     return std::move(future).thenValue(
@@ -2448,7 +2458,7 @@ Future<Unit> whileDo(P&& predicate, F&& thunk) {
 }
 
 template <class F>
-Future<Unit> times(const int n, F&& thunk) {
+auto times(const int n, F&& thunk) {
   return folly::whileDo(
       [n, count = std::make_unique<std::atomic<int>>(0)]() mutable {
         return count->fetch_add(1, std::memory_order_relaxed) < n;
@@ -2512,21 +2522,14 @@ auto ensure(F&& f, Ensure&& ensure) {
 } // namespace futures
 
 template <class Clock>
-Future<Unit> Timekeeper::at(std::chrono::time_point<Clock> when) {
+SemiFuture<Unit> Timekeeper::at(std::chrono::time_point<Clock> when) {
   auto now = Clock::now();
 
   if (when <= now) {
-    return makeFuture();
+    return makeSemiFuture();
   }
 
   return after(std::chrono::duration_cast<Duration>(when - now));
 }
 
-// Instantiate the most common Future types to save compile time
-extern template class Future<Unit>;
-extern template class Future<bool>;
-extern template class Future<int>;
-extern template class Future<int64_t>;
-extern template class Future<std::string>;
-extern template class Future<double>;
 } // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -680,7 +680,7 @@ TEST(Conv, IntToDouble) {
     (void)to<float>(957837589847);
     ADD_FAILURE();
   } catch (std::range_error& e) {
-    //LOG(INFO) << e.what();
+    // LOG(INFO) << e.what();
   }
 }
 
@@ -1063,14 +1063,70 @@ TEST(Conv, ConversionErrorFloatToInt) {
 }
 
 TEST(Conv, TryStringToBool) {
-  auto rv1 = folly::tryTo<bool>("xxxx");
-  EXPECT_FALSE(rv1.hasValue());
-  auto rv2 = folly::tryTo<bool>("false");
-  EXPECT_TRUE(rv2.hasValue());
-  EXPECT_FALSE(rv2.value());
-  auto rv3 = folly::tryTo<bool>("yes");
-  EXPECT_TRUE(rv3.hasValue());
-  EXPECT_TRUE(rv3.value());
+  for (const char* bad : {
+           "fals",
+           "tru",
+           "false other string",
+           "true other string",
+           "0x1",
+           "2",
+           "10",
+           "nu",
+           "da",
+           "of",
+           "onn",
+           "yep",
+           "nope",
+       }) {
+    auto rv = folly::tryTo<bool>(bad);
+    EXPECT_FALSE(rv.hasValue()) << bad;
+  }
+
+  for (const char* falsy : {
+           "f",
+           "F",
+           "false",
+           "False",
+           "FALSE",
+           " false ",
+           "0",
+           "00",
+           "n",
+           "N",
+           "no",
+           "No",
+           "NO",
+           "off",
+           "Off",
+           "OFF",
+       }) {
+    auto rv = folly::tryTo<bool>(falsy);
+    EXPECT_TRUE(rv.hasValue()) << falsy;
+    EXPECT_FALSE(rv.value()) << falsy;
+  }
+
+  for (const char* truthy : {
+           "t",
+           "T",
+           "true",
+           "True",
+           "TRUE",
+           " true ",
+           "1",
+           "01",
+           "y",
+           "Y",
+           "yes",
+           "Yes",
+           "YES",
+           "on",
+           "On",
+           "ON",
+       }) {
+    auto rv = folly::tryTo<bool>(truthy);
+    EXPECT_TRUE(rv.hasValue()) << truthy;
+    EXPECT_TRUE(rv.value()) << truthy;
+  }
 }
 
 TEST(Conv, TryStringToInt) {

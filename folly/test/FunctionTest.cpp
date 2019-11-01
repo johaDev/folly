@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -811,11 +811,7 @@ TEST(Function, SafeCaptureByReference) {
   // for_each's second parameter is of type Function<...> const&.
   // Hence we know we can safely pass it a lambda that references local
   // variables. There is no way the reference to x will be stored anywhere.
-  for_each<std::vector<int>>(vec, [&sum](int x) { sum += x; });
-
-  // gcc versions before 4.9 cannot deduce the type T in the above call
-  // to for_each. Modern compiler versions can compile the following line:
-  //   for_each(vec, [&sum](int x) { sum += x; });
+  for_each(vec, [&sum](int x) { sum += x; });
 
   EXPECT_EQ(999, sum);
 }

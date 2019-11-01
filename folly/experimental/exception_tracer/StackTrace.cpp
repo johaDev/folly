@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -61,46 +61,46 @@ bool StackTraceStack::pushCurrent() {
   }
   node->frameCount = n;
 
-  node->next = top_;
-  top_ = node;
+  node->next = state_[kTopIdx];
+  state_[kTopIdx] = node;
   return true;
 }
 
 bool StackTraceStack::pop() {
   checkGuard();
-  if (!top_) {
+  if (!state_[kTopIdx]) {
     return false;
   }
 
-  auto node = top_;
-  top_ = node->next;
+  auto node = state_[kTopIdx];
+  state_[kTopIdx] = node->next;
   node->deallocate();
   return true;
 }
 
 bool StackTraceStack::moveTopFrom(StackTraceStack& other) {
   checkGuard();
-  if (!other.top_) {
+  if (!other.state_[kTopIdx]) {
     return false;
   }
 
-  auto node = other.top_;
-  other.top_ = node->next;
-  node->next = top_;
-  top_ = node;
+  auto node = other.state_[kTopIdx];
+  other.state_[kTopIdx] = node->next;
+  node->next = state_[kTopIdx];
+  state_[kTopIdx] = node;
   return true;
 }
 
 void StackTraceStack::clear() {
   checkGuard();
-  while (top_) {
+  while (state_[kTopIdx]) {
     pop();
   }
 }
 
 StackTrace* StackTraceStack::top() {
   checkGuard();
-  return top_;
+  return state_[kTopIdx];
 }
 
 StackTrace* StackTraceStack::next(StackTrace* p) {

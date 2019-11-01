@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,6 +40,26 @@ TEST(allocateBytes, simple) {
   EXPECT_TRUE(p != nullptr);
   deallocateBytes(p, 10);
 }
+
+TEST(allocateBytes, zero) {
+  auto p = allocateBytes(0);
+  deallocateBytes(p, 0);
+}
+
+TEST(operatorNewDelete, zero) {
+  auto p = ::operator new(0);
+  EXPECT_TRUE(p != nullptr);
+  ::operator delete(p);
+}
+
+#if __cpp_sized_deallocation
+TEST(operatorNewDelete, sized_zero) {
+  std::size_t n = 0;
+  auto p = ::operator new(n);
+  EXPECT_TRUE(p != nullptr);
+  ::operator delete(p, n);
+}
+#endif
 
 TEST(aligned_malloc, examples) {
   auto trial = [](size_t align) {
